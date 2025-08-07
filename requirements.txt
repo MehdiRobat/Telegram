@@ -1,0 +1,6 @@
+pyrogram
+tgcrypto
+pymongo
+dnspython
+apscheduler
+python-dotenv
