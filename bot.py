@@ -29,6 +29,21 @@ upload_data = {}  # وضعیت مراحل آپلود ادمین
 
 # -------- ساخت کلاینت Pyrogram --------
 bot = Client("BoxUploader", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+# --- tiny health server for Render (only if using Web Service) ---
+import os, threading, http.server, socketserver
+
+def _start_health_server():
+    port = int(os.getenv("PORT", "10000"))  # Render می‌فرسته
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+    with socketserver.TCPServer(("", port), Handler) as httpd:
+        httpd.serve_forever()
+
+threading.Thread(target=_start_health_server, daemon=True).start()
+# --- end tiny health server ---
 
 # ------------------ دستور /start ------------------
 @bot.on_message(filters.command("start") & filters.private)
