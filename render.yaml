@@ -2,8 +2,8 @@ services:
   - type: worker
     name: boxup-bot
     env: python
-    plan: starter  # یا همون پلنی که داری
-    region: frankfurt  # نزدیک‌ترین دیتاسنتر به آلمان
+    plan: starter
+    region: frankfurt
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     autoDeploy: true
@@ -13,7 +13,7 @@ services:
       - key: API_HASH
         value: "b9a6835fa0eea6e9f8a87a320b3ab1ae"
       - key: BOT_TOKEN
-        value: "7696655685:AAHma2PzdCoZkKf6_DU2fU7DAFD5R2hhFvo"
+        value: "7696655685:AAFBFhue6YT1uvOSRmoCXNxWpkTWPxYXElg"
       - key: BOT_USERNAME
         value: "BoxUp_bot"
       - key: MONGO_URI
