@@ -1,8 +1,8 @@
-# ======================= BoxUp_bot — Final bot.py (TZ-safe) =======================
-# 🇮🇷 توضیحات کامل فارسی — نسخه پایدار، پیشرفته و آماده‌ی دیپلوی در Render (Background Worker)
-# امکانات: عضویت اجباری، دیپ‌لینک (F<film_id>), آپلود چندمرحله‌ای ادمین، پنل ادمین کامل،
-# زمان‌بندی ارسال، آمار و ری‌اکشن، دکمه «💬 نظر بده» (Discussion)، CSV Export، آپدیت بازدیدها،
-# و مدیریت FloodWait — همه‌ی زمان‌ها timezone-aware هستند.
+# ======================= BoxUp_bot — Final bot.py (TZ-safe, webhook-free) =======================
+# 🇮🇷 ربات پیشرفته فیلم/سریال با: عضویت اجباری، دیپ‌لینک (F<film_id>)، آپلود چندمرحله‌ای ادمین،
+# پنل ادمین کامل، زمان‌بندی پست، آمار و ری‌اکشن، دکمه «💬 نظر بده» (Discussion)، CSV Export،
+# آپدیت بازدیدها، و مدیریت FloodWait. همه زمان‌ها timezone-aware هستند.
+# 🚀 مخصوص اجرای Long Polling روی Render به‌صورت Background Worker (بدون Webhook)
 
 import os
 import re
@@ -29,7 +29,7 @@ from bson.objectid import ObjectId
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
 
-# ---------------------- ⚙️ تنظیمات از محیط ----------------------
+# ---------------------- ⚙️ تنظیمات محیط ----------------------
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -122,7 +122,7 @@ def get_subscribe_buttons() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 def build_post_link_for_comments(channel_id: int, message_id: int) -> str:
-    # برای کانال‌های -100...
+    # کانال‌های -100...
     abs_id = str(channel_id).replace("-100", "") if str(channel_id).startswith("-100") else str(abs(channel_id))
     return f"https://t.me/c/{abs_id}/{message_id}?comment=1"
 
@@ -868,7 +868,7 @@ async def send_scheduled_posts():
     """
     هر یک دقیقه: ارسال پست‌های رسیده به موعدشان (UTC naive در DB) + تنظیم کیبورد
     """
-    now = datetime.now(timezone.utc)  # ✅ جایگزین utcnow()
+    now = datetime.now(timezone.utc)  # ✅
     posts = list(scheduled_posts.find({"scheduled_time": {"$lte": now.replace(tzinfo=None)}}))  # DB: naive UTC
     for post in posts:
         film = films_col.find_one({"film_id": post["film_id"]})
@@ -1045,6 +1045,12 @@ async def stats_cmd(client: Client, message: Message):
            f"👍 {r.get('like',0)} | ❤️ {r.get('heart',0)} | 💔 {r.get('broken',0)} | 👎 {r.get('dislike',0)}")
     await message.reply(txt)
 
+# ---------------------- 🧪 /ping برای تست سریع (ادمین) ----------------------
+@bot.on_message(filters.command("ping") & filters.user(ADMIN_IDS))
+async def ping_cmd(client: Client, message: Message):
+    me = await client.get_me()
+    await message.reply(f"🟢 pong from @{me.username} at {datetime.now(timezone.utc).isoformat()}")
+
 # ---------------------- ⏱ Scheduler Boot ----------------------
 async def scheduler_boot():
     scheduler = AsyncIOScheduler()
@@ -1058,12 +1064,25 @@ async def scheduler_boot():
 async def noop_cb(client: Client, cq: CallbackQuery):
     await cq.answer()
 
+# ---------------------- 🧼 After startup: پاک‌کردن Webhook + لاگ زنده بودن ----------------------
+async def after_startup():
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        print("delete_webhook error:", e)
+    try:
+        me = await bot.get_me()
+        print(f"✅ Bot is live as @{me.username} (id={me.id})")
+    except Exception as e:
+        print("get_me error:", e)
+
 # ---------------------- اجرای پایدار ----------------------
 async def main():
-    print("🤖 ربات با موفقیت راه‌اندازی شد و منتظر دستورات است...")
+    print("🚀 Starting bot process...")
     while True:
         try:
             async with bot:
+                await after_startup()                      # 👈 مهم: وب‌هوک پاک شود
                 scheduler = await scheduler_boot()
                 await idle()
                 scheduler.shutdown(wait=False)
