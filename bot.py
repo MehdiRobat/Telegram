@@ -15,6 +15,8 @@ from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineK
 from pymongo import MongoClient
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from bson import ObjectId
+from pyrogram import idle
+import asyncio
 
 # ---------------------- ⚙️ بارگذاری env ----------------------
 load_dotenv()
@@ -1035,84 +1037,82 @@ async def send_scheduled_posts():
         return
 
     for post in posts:
-        film = films_col.find_one({"film_id": post["film_id"]})
-        if not film:
-            scheduled_posts.delete_one({"_id": post["_id"]})
-            continue
-
-        title = film.get("title", post["film_id"])
-        genre = film.get("genre", "")
-        year  = film.get("year", "")
-        cover_id = film.get("cover_id")
-
-        # کیفیت‌ها برای نمایش
-        qualities = []
-        for f in film.get("files", []):
-            q = (f.get("quality") or "").strip()
-            if q and q not in qualities:
-                qualities.append(q)
-        qualities_text = f"💬 کیفیت‌ها: {', '.join(qualities)}" if qualities else ""
-
-        # ✅ کپشن بدون بک‌اسلش داخل expression
-        caption_parts = [f"🎬 <b>{title}</b>"]
-        if genre:
-            caption_parts.append(f"🎭 ژانر: {genre}")
-        if year:
-            caption_parts.append(f"📆 سال: {year}")
-        if qualities_text:
-            caption_parts.append(qualities_text)
-        caption = "\n".join(caption_parts).strip()
-
         try:
+            film = films_col.find_one({"film_id": post["film_id"]})
+            if not film:
+                scheduled_posts.delete_one({"_id": post["_id"]})
+                continue
+
+            title    = film.get("title", post["film_id"])
+            genre    = film.get("genre", "")
+            year     = film.get("year", "")
+            cover_id = film.get("cover_id")
+
+            # کیفیت‌ها برای نمایش
+            qualities = []
+            for f in film.get("files", []):
+                q = (f.get("quality") or "").strip()
+                if q and q not in qualities:
+                    qualities.append(q)
+            qualities_text = f"💬 کیفیت‌ها: {', '.join(qualities)}" if qualities else ""
+
+            # کپشن
+            caption_parts = [f"🎬 <b>{title}</b>"]
+            if genre:
+                caption_parts.append(f"🎭 ژانر: {genre}")
+            if year:
+                caption_parts.append(f"📆 سال: {year}")
+            if qualities_text:
+                caption_parts.append(qualities_text)
+            caption = "\n".join(caption_parts).strip()
+
+            # ارسال پست
             if cover_id:
                 sent = await bot.send_photo(chat_id=post["channel_id"], photo=cover_id, caption=caption)
             else:
                 sent = await bot.send_message(chat_id=post["channel_id"], text=caption)
+
+            # ثبت آمار اولیه (فقط اگر قبلاً وجود نداشته)
+            post_stats.update_one(
+                {"film_id": post["film_id"], "channel_id": post["channel_id"], "message_id": sent.id},
+                {"$setOnInsert": {
+                    "downloads": 0,
+                    "shares": 0,
+                    "views": 0,
+                    "created_at": datetime.now()
+                }},
+                upsert=True
+            )
+
+            # دکمه‌های آمار و دانلود
+            await update_post_stats_markup(bot, post["film_id"], post["channel_id"], sent.id)
+
+            # حذف پست از صف زمان‌بندی
+            scheduled_posts.delete_one({"_id": post["_id"]})
+
         except Exception as e:
             print("❌ scheduled send error:", e)
             scheduled_posts.delete_one({"_id": post["_id"]})
             continue
 
-        # ثبت آمار اولیه‌ی پست (اگر قبلاً نبوده)
-        post_stats.update_one(
-            {"film_id": post["film_id"], "channel_id": post["channel_id"], "message_id": sent.id},
-            {"$setOnInsert": {
-                "downloads": 0,
-                "shares": 0,
-                "views": 0,
-                "created_at": datetime.now()
-            }},
-            upsert=True
-        )
-
-        # چسباندن کیبورد آمار + دکمه دانلود
-        await update_post_stats_markup(bot, post["film_id"], post["channel_id"], sent.id)
-
-        # حذف از صف
-        scheduled_posts.delete_one({"_id": post["_id"]})
-
-
-        # ثبت آمار اولیه
-        post_stats.update_one(
-            {"film_id": post["film_id"], "channel_id": post["channel_id"], "message_id": sent.id},
-            {"$setOnInsert": {
-                "downloads": 0, "shares": 0, "views": 0,
-                "created_at": datetime.now()
-            }},
-            upsert=True
-        )
-
-        # چسباندن کیبورد آمار + دکمه دانلود
-        await update_post_stats_markup(bot, post["film_id"], post["channel_id"], sent.id)
-
-        # حذف از صف
-        scheduled_posts.delete_one({"_id": post["_id"]})
-
+# ---------------------- ⏱ تنظیم Scheduler (بدون start اینجا) ----------------------
 scheduler = AsyncIOScheduler()
-scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
-scheduler.start()
+scheduler.add_job(send_scheduled_posts, "interval", minutes=1, next_run_time=datetime.now())
 
 # ---------------------- 🚀 اجرای نهایی ----------------------
+async def main():
+    await bot.start()
+
+    # استارت Scheduler درون لوپ
+    scheduler.start()
+    print("✅ Scheduler started")
+
+    await idle()  # نگه‌داشتن ربات
+
+    # خاموشی تمیز
+    scheduler.shutdown(wait=False)
+    await bot.stop()
+    print("👋 Bot stopped cleanly")
+
 if __name__ == "__main__":
-    print("🤖 ربات با موفقیت راه‌اندازی شد و منتظر دستورات است...")
-    bot.run()
+    asyncio.run(main())
