@@ -1105,24 +1105,26 @@ async def send_scheduled_posts():
 # ====================== اجرای درست در Render / asyncio ======================
 import asyncio
 from pyrogram import idle
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 async def main():
     print("🤖 ربات با موفقیت راه‌اندازی شد و منتظر دستورات است...")
 
-    # Pyrogram خودش استارت/استاپ رو داخل context مدیریت می‌کند
+    # Pyrogram خودش start/stop را مدیریت می‌کند
     async with bot:
-        # زمان‌بند را بعد از استارتِ بات بساز و روی همین loop ست کن
+        # زمان‌بند را بعد از start بوت بالا بیاور
         scheduler = AsyncIOScheduler()
         scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
         scheduler.start()
 
-        # سرویس را زنده نگه دار
+        # تا زمان توقف سرویس، زنده بمان
         await idle()
 
-        # قبل از خروج، زمان‌بند را ببند
+        # قبل از خروج، زمان‌بند را خاموش کن
         scheduler.shutdown(wait=False)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
