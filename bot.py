@@ -1102,12 +1102,27 @@ async def send_scheduled_posts():
 
         scheduled_posts.delete_one({"_id": post["_id"]})
 
-# راه‌اندازی زمان‌بند
-scheduler = AsyncIOScheduler()
-scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
-scheduler.start()
+# ====================== اجرای درست در محیط‌های هاست مثل Render ======================
+from pyrogram import idle
 
-# ---------------------- 🚀 اجرای نهایی ----------------------
-if __name__ == "__main__":
+async def main():
     print("🤖 ربات با موفقیت راه‌اندازی شد و منتظر دستورات است...")
-    bot.run()
+
+    # 1) استارت ربات (اینجا event loop در حال اجراست)
+    await bot.start()
+
+    # 2) راه‌اندازی زمان‌بند *بعد از* start ربات
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
+    scheduler.start()
+
+    # 3) نگه‌داشتن سرویس تا وقتی دستی متوقف بشه
+    await idle()
+
+    # 4) توقف تمیز
+    await bot.stop()
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
+
