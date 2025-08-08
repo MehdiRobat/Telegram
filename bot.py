@@ -1,8 +1,8 @@
-# ======================= BoxUp_bot — Final bot.py (TZ-safe, webhook-free) =======================
-# 🇮🇷 ربات پیشرفته فیلم/سریال با: عضویت اجباری، دیپ‌لینک (F<film_id>)، آپلود چندمرحله‌ای ادمین،
-# پنل ادمین کامل، زمان‌بندی پست، آمار و ری‌اکشن، دکمه «💬 نظر بده» (Discussion)، CSV Export،
-# آپدیت بازدیدها، و مدیریت FloodWait. همه زمان‌ها timezone-aware هستند.
-# 🚀 مخصوص اجرای Long Polling روی Render به‌صورت Background Worker (بدون Webhook)
+# ======================= BoxUp_bot — Final bot.py (Pyrogram, TZ-safe) =======================
+# 🇮🇷 ربات پیشرفته: عضویت اجباری، دیپ‌لینک (F<film_id>)، آپلود چندمرحله‌ای ادمین،
+# پنل ادمین کامل، زمان‌بندی پست، آمار و ری‌اکشن، دکمه «💬 نظر بده»، CSV Export،
+# به‌روزرسانی خودکار بازدیدها، و مدیریت FloodWait — همه زمان‌ها timezone-aware هستند.
+# 🚀 مخصوص Long Polling (بدون Webhook). با Pyrogram 2.x تست شده.
 
 import os
 import re
@@ -508,7 +508,7 @@ async def film_sched_save_cb(client: Client, cq: CallbackQuery):
     channel_id = int(channel_id)
     try:
         local_dt = TZ_DE.localize(datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M"))
-        dt_utc_naive = local_dt.astimezone(pytz.utc).replace(tzinfo=None)  # در DB به‌صورت naive-UTC می‌ریزیم
+        dt_utc_naive = local_dt.astimezone(pytz.utc).replace(tzinfo=None)  # در DB به‌صورت naive-UTC
     except Exception:
         return await cq.answer("❌ تاریخ/ساعت نامعتبر.", show_alert=True)
     film = films_col.find_one({"film_id": film_id})
@@ -523,7 +523,7 @@ async def film_sched_save_cb(client: Client, cq: CallbackQuery):
     schedule_data.pop(cq.from_user.id, None)
     await cq.message.edit_text("✅ زمان‌بندی ذخیره شد.")
 
-# ---------------------- انتشار فوری (با چک Discussion + کیبورد) ----------------------
+# ---------------------- انتشار فوری ----------------------
 @bot.on_callback_query(filters.regex(r"^film_pub_go::(.+)::(-?\d+)$") & filters.user(ADMIN_IDS))
 async def film_pub_go_cb(client: Client, cq: CallbackQuery):
     await cq.answer()
@@ -868,7 +868,7 @@ async def send_scheduled_posts():
     """
     هر یک دقیقه: ارسال پست‌های رسیده به موعدشان (UTC naive در DB) + تنظیم کیبورد
     """
-    now = datetime.now(timezone.utc)  # ✅
+    now = datetime.now(timezone.utc)
     posts = list(scheduled_posts.find({"scheduled_time": {"$lte": now.replace(tzinfo=None)}}))  # DB: naive UTC
     for post in posts:
         film = films_col.find_one({"film_id": post["film_id"]})
@@ -876,7 +876,6 @@ async def send_scheduled_posts():
             scheduled_posts.delete_one({"_id": post["_id"]})
             continue
 
-        # هشدار Discussion
         has_discussion = await check_discussion_linked(bot, post["channel_id"])
         if not has_discussion and ADMIN_IDS:
             try:
@@ -929,7 +928,7 @@ async def refresh_channel_post_views():
     """
     هر 3 دقیقه: بازخوانی بازدید پست‌های 48 ساعت اخیر و به‌روزرسانی کیبورد
     """
-    since = datetime.now(timezone.utc) - timedelta(hours=48)  # ✅
+    since = datetime.now(timezone.utc) - timedelta(hours=48)
     recent = list(ch_posts_col.find({"created_at": {"$gte": since}}).sort("created_at", DESCENDING))
 
     from collections import defaultdict
@@ -966,7 +965,7 @@ async def refresh_channel_post_views():
                     except Exception as e:
                         log.warning(f"edit keyboard (views) error: {e}")
 
-# ---------------------- 📊 کال‌بک‌های ری‌اکشن/اشتراک ----------------------
+# ---------------------- 📊 ری‌اکشن/اشتراک ----------------------
 @bot.on_callback_query(filters.regex(r"^react::(like|heart|broken|dislike)::(-?\d+)::(\d+)$"))
 async def react_callback(client: Client, cq: CallbackQuery):
     typ = cq.matches[0].group(1)
@@ -977,11 +976,11 @@ async def react_callback(client: Client, cq: CallbackQuery):
     try:
         reactions_log.insert_one({
             "channel_id": cid, "message_id": mid, "user_id": uid,
-            "type": typ, "at": datetime.now(timezone.utc)  # ✅
+            "type": typ, "at": datetime.now(timezone.utc)
         })
         ch_posts_col.update_one(
             {"channel_id": cid, "message_id": mid},
-            {"$inc": {f"reactions.{typ}": 1}, "$set": {"updated_at": datetime.now(timezone.utc)}},  # ✅
+            {"$inc": {f"reactions.{typ}": 1}, "$set": {"updated_at": datetime.now(timezone.utc)}},
             upsert=True
         )
         doc = ch_posts_col.find_one({"channel_id": cid, "message_id": mid})
@@ -1001,7 +1000,7 @@ async def share_callback(client: Client, cq: CallbackQuery):
 
     ch_posts_col.update_one(
         {"channel_id": cid, "message_id": mid},
-        {"$inc": {"shares": 1}, "$set": {"updated_at": datetime.now(timezone.utc)}},  # ✅
+        {"$inc": {"shares": 1}, "$set": {"updated_at": datetime.now(timezone.utc)}},
         upsert=True
     )
     doc = ch_posts_col.find_one({"channel_id": cid, "message_id": mid})
@@ -1012,8 +1011,8 @@ async def share_callback(client: Client, cq: CallbackQuery):
         log.warning(f"share keyboard update error: {e}")
 
     abs_id = str(cid).replace("-100", "") if str(cid).startswith("-100") else str(abs(cid))
-    link = f"https://t.me/c/{abs_id}/{mid}"
-    await cq.answer("لینک پست کپی کن و به اشتراک بگذار ✅", show_alert=False)
+    _ = f"https://t.me/c/{abs_id}/{mid}"  # لینک مستقیم پست (برای کپی توسط کاربر)
+    await cq.answer("لینک پست آماده‌ی اشتراک‌گذاری ✅", show_alert=False)
 
 # ---------------------- /stats ----------------------
 @bot.on_message(filters.command("stats") & filters.user(ADMIN_IDS))
@@ -1064,12 +1063,8 @@ async def scheduler_boot():
 async def noop_cb(client: Client, cq: CallbackQuery):
     await cq.answer()
 
-# ---------------------- 🧼 After startup: پاک‌کردن Webhook + لاگ زنده بودن ----------------------
+# ---------------------- 🧼 After startup: فقط لاگ زنده بودن ----------------------
 async def after_startup():
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-    except Exception as e:
-        print("delete_webhook error:", e)
     try:
         me = await bot.get_me()
         print(f"✅ Bot is live as @{me.username} (id={me.id})")
@@ -1082,7 +1077,7 @@ async def main():
     while True:
         try:
             async with bot:
-                await after_startup()                      # 👈 مهم: وب‌هوک پاک شود
+                await after_startup()
                 scheduler = await scheduler_boot()
                 await idle()
                 scheduler.shutdown(wait=False)
