@@ -20,6 +20,11 @@ from pyrogram.types import (
 )
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 # ---------------------- ⚙️ بارگذاری env ----------------------
 load_dotenv()
@@ -102,6 +107,11 @@ schedule_data: dict[int, dict] = {}      # فلو زمان‌بندی
 admin_edit_state: dict[int, dict] = {}   # فلو پنل ادمین (ویرایش‌ها)
 
 # ---------------------- 🧰 توابع کمکی ----------------------
+@bot.on_message(filters.command("ping") & filters.private, group=0)
+async def ping_handler(client, message):
+    logging.info("PING received from %s", message.from_user.id)
+    await message.reply("pong ✅")
+
 def caption_to_buttons(caption: str):
     """
     الگوی «متن (لینک)» را به دکمه تبدیل می‌کند. مثال:
