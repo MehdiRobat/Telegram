@@ -9,6 +9,7 @@
 # • خروجی CSV
 # • حذف خودکار پیام‌های ارسالی به کاربر بعد از DELETE_DELAY ثانیه
 # -----------------------------------------------------------------------
+# بالای فایل کنار importها اضافه کن
 
 import os, re, json, io, csv, asyncio, logging, unicodedata, string
 from datetime import datetime
