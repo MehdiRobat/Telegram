@@ -27,6 +27,14 @@ from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineK
 
 from pymongo import MongoClient
 from bson import ObjectId
+# مسیرهای پایدار
+DATA_DIR    = os.getenv("DATA_DIR", "/var/data")
+SESSION_DIR = os.getenv("SESSION_DIR", os.path.join(DATA_DIR, "sessions"))
+LOG_DIR     = os.getenv("LOG_DIR", os.path.join(DATA_DIR, "logs"))
+EXPORTS_DIR = os.getenv("EXPORTS_DIR", os.path.join(DATA_DIR, "exports"))
+
+for p in (DATA_DIR, SESSION_DIR, LOG_DIR, EXPORTS_DIR):
+    os.makedirs(p, exist_ok=True)
 
 # ---------------------- ⚙️ بارگذاری env ----------------------
 load_dotenv()
@@ -98,14 +106,18 @@ SESSION_DIR = os.getenv("SESSION_DIR", "./.sessions")
 os.makedirs(SESSION_DIR, exist_ok=True)
 
 # ---------------------- 🤖 Pyrogram Client ----------------------
-# مهم: parse_mode پیش‌فرض را HTML می‌گذاریم تا در همه‌ی send_* و reply_* ها اعمال شود.
+# مسیر ذخیره فایل‌های سشن روی دیسک پایدار Render
+SESSION_DIR = os.getenv("SESSION_DIR", "/var/data/pyro_sessions")
+os.makedirs(SESSION_DIR, exist_ok=True)
+
+# ایجاد کلاینت Pyrogram با مسیر پایدار
 bot = Client(
     "BoxUploader",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
     parse_mode=ParseMode.HTML,
-    workdir=SESSION_DIR   # 👈 محل ذخیره سشن روی Render یا لوکال
+    workdir=SESSION_DIR
 )
 
 # ---------------------- 🤖 Pyrogram Client ----------------------
