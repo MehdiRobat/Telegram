@@ -1329,12 +1329,13 @@ async def stat_share_cb(client: Client, cq: CallbackQuery):
         await client.send_message(cq.from_user.id, f"✨ این لینک را برای دوستانت بفرست:\nhttps://t.me/{BOT_USERNAME}?start={film_id}")
     except Exception:
         pass
-# ---------------------- 🚀 اجرای نهایی (پایدار برای Render) ----------------------
+# ---------------------- 🚀 اجرای نهایی (Safe Single-Loop) ----------------------
 from pyrogram import idle
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+scheduler = AsyncIOScheduler()  # رو همون لوپ فعلی کار می‌کنه؛ event_loop نده
 
 async def main():
-    # پاک‌کردن وبهوک (برای polling)
+    # پاک کردن وبهوک (اختیاری)
     try:
         import urllib.request
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
@@ -1343,24 +1344,30 @@ async def main():
     except Exception as e:
         print("⚠️ deleteWebhook (HTTP) error:", e)
 
-    # حتماً Scheduler روی همین لوپ ساخته شود
-    loop = asyncio.get_running_loop()
-    scheduler = AsyncIOScheduler(event_loop=loop)
+    # شروع بات روی همین لوپ
+    await bot.start()
+
+    # جاب‌ها را اینجا ثبت و استارت کن (بدون event_loop)
     scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
     scheduler.add_job(refresh_stats_job,    "interval", minutes=2)
     scheduler.start()
     print("📅 Scheduler started successfully!")
+    print("🤖 Bot started. Waiting for updates…")
 
-    # مدیریت لایف‌سایکل Bot توسط خود Pyrogram
-    async with bot:
-        print("🤖 Bot started. Waiting for updates…")
-        await idle()  # تا سیگنال توقف
+    # نگه‌دار تا وقتی برنامه در حال اجراست
+    await idle()
 
-    # وقتی از async with خارج شدیم، بات تمیز stop می‌شود
-    scheduler.shutdown(wait=False)
-    print("📅 Scheduler shutdown. 🤖 Bot stopped.")
+    # خاموش کردن تمیز
+    print("🛑 Stopping...")
+    try:
+        scheduler.shutdown(wait=False)
+        print("📅 Scheduler shutdown.")
+    except Exception:
+        pass
+    await bot.stop()
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    # مهم: به جای asyncio.run یا async with از run خود Pyrogram استفاده کن
+    bot.run(main())
+
 
