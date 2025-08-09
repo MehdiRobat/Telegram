@@ -1306,9 +1306,35 @@ scheduler = AsyncIOScheduler()
 scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
 # 👇 افزوده: رفرش دوره‌ای آمار هر ۲ دقیقه
 scheduler.add_job(lambda: asyncio.create_task(refresh_stats_job()), "interval", minutes=2)
-scheduler.start()
 
 # ---------------------- 🚀 اجرای نهایی ----------------------
-if __name__ == "__main__":
+from pyrogram import idle
+
+async def main():
+    # شروع ربات
+    await bot.start()
     print("🤖 ربات با موفقیت راه‌اندازی شد و منتظر دستورات است...")
-    bot.run()
+
+    # حذف وبهوک برای دریافت آپدیت با polling
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        print("🧹 Webhook حذف شد (drop_pending_updates=True)")
+    except Exception as e:
+        print("⚠️ خطا در حذف Webhook:", e)
+
+    # شروع زمان‌بند بعد از استارت ربات
+    scheduler.start()
+    print("📅 Scheduler started successfully!")
+
+    # منتظر ماندن برای پیام‌ها
+    await idle()
+
+    # توقف زمان‌بند و ربات
+    scheduler.shutdown(wait=False)
+    await bot.stop()
+    print("👋 Bot stopped.")
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
+
