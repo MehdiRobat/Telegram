@@ -31,6 +31,10 @@ from bson import ObjectId
 # ---------------------- ⚙️ بارگذاری env ----------------------
 load_dotenv()
 
+# 👇 این دو خط را دقیقاً بعد از load_dotenv بگذار
+SESSION_DIR = os.getenv("SESSION_DIR", "./.sessions")
+os.makedirs(SESSION_DIR, exist_ok=True)
+
 def _get_env_str(key: str, required=True, default=None):
     """خواندن مقدار رشته‌ای از .env با کنترل خطا"""
     v = os.getenv(key, default)
@@ -89,6 +93,20 @@ try:
     print(f"✅ اتصال به MongoDB برقرار شد. DB = {MONGO_DB_NAME}")
 except Exception as e:
     raise RuntimeError(f"❌ خطا در اتصال به MongoDB: {e}")
+# ---------------------- 📂 محل ذخیره سشن ----------------------
+SESSION_DIR = os.getenv("SESSION_DIR", "./.sessions")
+os.makedirs(SESSION_DIR, exist_ok=True)
+
+# ---------------------- 🤖 Pyrogram Client ----------------------
+# مهم: parse_mode پیش‌فرض را HTML می‌گذاریم تا در همه‌ی send_* و reply_* ها اعمال شود.
+bot = Client(
+    "BoxUploader",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN,
+    parse_mode=ParseMode.HTML,
+    workdir=SESSION_DIR   # 👈 محل ذخیره سشن روی Render یا لوکال
+)
 
 # ---------------------- 🤖 Pyrogram Client ----------------------
 # مهم: parse_mode پیش‌فرض را HTML می‌گذاریم تا در همه‌ی send_* و reply_* ها اعمال شود.
