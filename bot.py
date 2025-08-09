@@ -1311,30 +1311,36 @@ scheduler.add_job(lambda: asyncio.create_task(refresh_stats_job()), "interval", 
 from pyrogram import idle
 
 async def main():
-    # شروع ربات
-    await bot.start()
-    print("🤖 ربات با موفقیت راه‌اندازی شد و منتظر دستورات است...")
+    # ربات را در context اجرا کن تا start/stop مدیریت شود
+    async with bot:
+        print("🤖 ربات با موفقیت راه‌اندازی شد و منتظر دستورات است...")
 
-    # حذف وبهوک برای دریافت آپدیت با polling
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-        print("🧹 Webhook حذف شد (drop_pending_updates=True)")
-    except Exception as e:
-        print("⚠️ خطا در حذف Webhook:", e)
+        # پاک‌کردن وبهوک از طریق Bot API (سازگار با همه نسخه‌ها)
+        try:
+            import urllib.request
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
+            with urllib.request.urlopen(url, timeout=10) as r:
+                print(f"🧹 Webhook delete HTTP status: {r.status}")
+        except Exception as e:
+            print("⚠️ deleteWebhook (HTTP) error:", e)
 
-    # شروع زمان‌بند بعد از استارت ربات
-    scheduler.start()
-    print("📅 Scheduler started successfully!")
+        # استارت زمان‌بند داخل همین loop
+        try:
+            scheduler.start()
+            print("📅 Scheduler started successfully!")
+        except Exception as e:
+            print("⚠️ Scheduler start error:", e)
 
-    # منتظر ماندن برای پیام‌ها
-    await idle()
+        # لانگ‌پولینگ
+        await idle()
 
-    # توقف زمان‌بند و ربات
-    scheduler.shutdown(wait=False)
-    await bot.stop()
-    print("👋 Bot stopped.")
+        # خاموشی تمیزِ Scheduler قبل از خروج از context
+        try:
+            scheduler.shutdown(wait=False)
+            print("📅 Scheduler shutdown.")
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
-
