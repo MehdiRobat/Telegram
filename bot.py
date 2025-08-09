@@ -1301,13 +1301,7 @@ async def stat_share_cb(client: Client, cq: CallbackQuery):
     except Exception:
         pass
 
-# ---------------------- راه‌اندازی زمان‌بند ----------------------
-scheduler = AsyncIOScheduler()
-scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
-# 👇 افزوده: رفرش دوره‌ای آمار هر ۲ دقیقه
-scheduler.add_job(lambda: asyncio.create_task(refresh_stats_job()), "interval", minutes=2)
-
-# ---------------------- 🚀 اجرای نهایی ----------------------
+# ---------------------- 🚀 اجرای نهایی (نسخه پایدار) ----------------------
 from pyrogram import idle
 
 async def main():
@@ -1324,22 +1318,27 @@ async def main():
         except Exception as e:
             print("⚠️ deleteWebhook (HTTP) error:", e)
 
-        # استارت زمان‌بند داخل همین loop
+        # ✅ Scheduler را داخل همین event loop بساز و استارت کن
+        loop = asyncio.get_running_loop()
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        scheduler = AsyncIOScheduler(event_loop=loop)
+
+        # جاب‌ها را مستقیم ثبت کن (بدون create_task / lambda)
+        scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
+        scheduler.add_job(refresh_stats_job, "interval", minutes=2)
+
         try:
             scheduler.start()
             print("📅 Scheduler started successfully!")
-        except Exception as e:
-            print("⚠️ Scheduler start error:", e)
-
-        # لانگ‌پولینگ
-        await idle()
-
-        # خاموشی تمیزِ Scheduler قبل از خروج از context
-        try:
-            scheduler.shutdown(wait=False)
-            print("📅 Scheduler shutdown.")
-        except Exception:
-            pass
+            # لانگ‌پولینگ
+            await idle()
+        finally:
+            # خاموشی تمیز Scheduler پیش از خروج از context
+            try:
+                scheduler.shutdown(wait=False)
+                print("📅 Scheduler shutdown.")
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     import asyncio
