@@ -606,8 +606,15 @@ async def send_scheduled_posts():
         except Exception as e:
             scheduled_posts.update_one({"_id": job["_id"]}, {"$set": {"status": "error", "error": str(e)}})
 
+from pyrogram import idle
+
 # ---------------------- ▶️ اجرا ----------------------
+async def _runner():
+    # اسکیجولر را داخل لوپ Pyrogram استارت می‌کنیم
+    scheduler.start()
+    await idle()  # تا وقتی سیگنال توقف نیامده، لوپ زنده بماند
+
 if __name__ == "__main__":
     print("🤖 ربات با موفقیت اجرا شد و آماده دریافت دستورات است.")
-    scheduler.start()
-    bot.run()
+    bot.run(_runner())
+
