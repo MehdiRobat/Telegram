@@ -1299,12 +1299,12 @@ async def stat_share_cb(client: Client, cq: CallbackQuery):
         await client.send_message(cq.from_user.id, f"✨ این لینک را برای دوستانت بفرست:\nhttps://t.me/{BOT_USERNAME}?start={film_id}")
     except Exception:
         pass
-# ---------------------- 🚀 اجرای نهایی (سازگار با Render + Pyrogram) ----------------------
+# ---------------------- 🚀 اجرای نهایی (پایدار برای Render) ----------------------
 from pyrogram import idle
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-async def runner():
-    # پاک‌کردن وبهوک
+async def main():
+    # پاک‌کردن وبهوک (برای polling)
     try:
         import urllib.request
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
@@ -1313,19 +1313,24 @@ async def runner():
     except Exception as e:
         print("⚠️ deleteWebhook (HTTP) error:", e)
 
-    # ساخت Scheduler در همان loop
+    # یک Scheduler در همین event loop
     scheduler = AsyncIOScheduler()
     scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
-    scheduler.add_job(refresh_stats_job, "interval", minutes=2)
+    scheduler.add_job(refresh_stats_job,    "interval", minutes=2)
+    scheduler.start()
+    print("📅 Scheduler started successfully!")
 
+    # Bot را صراحتاً استارت/استاپ کن
+    await bot.start()
+    print("🤖 Bot started. Waiting for updates…")
     try:
-        scheduler.start()
-        print("📅 Scheduler started successfully!")
-        await idle()  # لانگ‌پولینگ Pyrogram
+        await idle()  # تا وقتی سیگنال توقف نیاد همین‌جا می‌مونه
     finally:
+        await bot.stop()
         scheduler.shutdown(wait=False)
-        print("📅 Scheduler shutdown.")
+        print("📅 Scheduler shutdown. 🤖 Bot stopped.")
 
 if __name__ == "__main__":
-    bot.run(runner())
+    import asyncio
+    asyncio.run(main())
 
