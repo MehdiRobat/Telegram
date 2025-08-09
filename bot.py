@@ -26,7 +26,6 @@ from pyrogram.enums import ChatMemberStatus, ParseMode
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from pymongo import MongoClient
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from bson import ObjectId
 
 # ---------------------- ⚙️ بارگذاری env ----------------------
@@ -1300,12 +1299,12 @@ async def stat_share_cb(client: Client, cq: CallbackQuery):
         await client.send_message(cq.from_user.id, f"✨ این لینک را برای دوستانت بفرست:\nhttps://t.me/{BOT_USERNAME}?start={film_id}")
     except Exception:
         pass
-
-# ---------------------- 🚀 اجرای نهایی (نسخه پایدار Render + Pyrogram) ----------------------
+# ---------------------- 🚀 اجرای نهایی (سازگار با Render + Pyrogram) ----------------------
 from pyrogram import idle
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 async def runner():
-    # پاک‌کردن وبهوک برای دریافت آپدیت با polling (سازگار با همه‌ی نسخه‌ها)
+    # پاک‌کردن وبهوک
     try:
         import urllib.request
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
@@ -1314,26 +1313,19 @@ async def runner():
     except Exception as e:
         print("⚠️ deleteWebhook (HTTP) error:", e)
 
-    # Scheduler را داخل همان event loop کلاینت بساز
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-    loop = asyncio.get_running_loop()
-    scheduler = AsyncIOScheduler(event_loop=loop)
-
-    # ❗️بدون lambda/ create_task → خودِ کوروتین‌ها را ثبت کن
+    # ساخت Scheduler در همان loop
+    scheduler = AsyncIOScheduler()
     scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
-    scheduler.add_job(refresh_stats_job,    "interval", minutes=2)
+    scheduler.add_job(refresh_stats_job, "interval", minutes=2)
 
     try:
         scheduler.start()
         print("📅 Scheduler started successfully!")
-        await idle()   # لانگ‌پولینگ Pyrogram
+        await idle()  # لانگ‌پولینگ Pyrogram
     finally:
-        try:
-            scheduler.shutdown(wait=False)
-            print("📅 Scheduler shutdown.")
-        except Exception:
-            pass
+        scheduler.shutdown(wait=False)
+        print("📅 Scheduler shutdown.")
 
 if __name__ == "__main__":
-    # Pyrogram خودش start/stop و loop را مدیریت می‌کند
     bot.run(runner())
+
