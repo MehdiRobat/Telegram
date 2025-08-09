@@ -1313,22 +1313,22 @@ async def main():
     except Exception as e:
         print("⚠️ deleteWebhook (HTTP) error:", e)
 
-    # یک Scheduler در همین event loop
-    scheduler = AsyncIOScheduler()
+    # حتماً Scheduler روی همین لوپ ساخته شود
+    loop = asyncio.get_running_loop()
+    scheduler = AsyncIOScheduler(event_loop=loop)
     scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
     scheduler.add_job(refresh_stats_job,    "interval", minutes=2)
     scheduler.start()
     print("📅 Scheduler started successfully!")
 
-    # Bot را صراحتاً استارت/استاپ کن
-    await bot.start()
-    print("🤖 Bot started. Waiting for updates…")
-    try:
-        await idle()  # تا وقتی سیگنال توقف نیاد همین‌جا می‌مونه
-    finally:
-        await bot.stop()
-        scheduler.shutdown(wait=False)
-        print("📅 Scheduler shutdown. 🤖 Bot stopped.")
+    # مدیریت لایف‌سایکل Bot توسط خود Pyrogram
+    async with bot:
+        print("🤖 Bot started. Waiting for updates…")
+        await idle()  # تا سیگنال توقف
+
+    # وقتی از async with خارج شدیم، بات تمیز stop می‌شود
+    scheduler.shutdown(wait=False)
+    print("📅 Scheduler shutdown. 🤖 Bot stopped.")
 
 if __name__ == "__main__":
     import asyncio
