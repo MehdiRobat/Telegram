@@ -1329,13 +1329,14 @@ async def stat_share_cb(client: Client, cq: CallbackQuery):
         await client.send_message(cq.from_user.id, f"✨ این لینک را برای دوستانت بفرست:\nhttps://t.me/{BOT_USERNAME}?start={film_id}")
     except Exception:
         pass
-# ---------------------- 🚀 اجرای نهایی (Safe Single-Loop) ----------------------
+# ---------------------- 🚀 اجرای نهایی (Single Event Loop) ----------------------
 from pyrogram import idle
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-scheduler = AsyncIOScheduler()  # رو همون لوپ فعلی کار می‌کنه؛ event_loop نده
+scheduler = AsyncIOScheduler()  # عمداً event_loop تعیین نکن
 
 async def main():
-    # پاک کردن وبهوک (اختیاری)
+    # پاک کردن وبهوک تا polling داشته باشیم
     try:
         import urllib.request
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
@@ -1344,20 +1345,20 @@ async def main():
     except Exception as e:
         print("⚠️ deleteWebhook (HTTP) error:", e)
 
-    # شروع بات روی همین لوپ
+    # استارت ربات روی همین لوپ
     await bot.start()
 
-    # جاب‌ها را اینجا ثبت و استارت کن (بدون event_loop)
+    # ثبت جاب‌ها روی همین لوپ
     scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
     scheduler.add_job(refresh_stats_job,    "interval", minutes=2)
     scheduler.start()
     print("📅 Scheduler started successfully!")
     print("🤖 Bot started. Waiting for updates…")
 
-    # نگه‌دار تا وقتی برنامه در حال اجراست
+    # نگه داشتن برنامه
     await idle()
 
-    # خاموش کردن تمیز
+    # شات‌داون تمیز
     print("🛑 Stopping...")
     try:
         scheduler.shutdown(wait=False)
@@ -1367,7 +1368,5 @@ async def main():
     await bot.stop()
 
 if __name__ == "__main__":
-    # مهم: به جای asyncio.run یا async with از run خود Pyrogram استفاده کن
+    # فقط از همین استفاده کن؛ نه asyncio.run، نه async with
     bot.run(main())
-
-
