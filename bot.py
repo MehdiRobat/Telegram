@@ -1,14 +1,14 @@
 # ======================= BoxUp_bot — Final bot.py =======================
 # ویژگی‌ها:
-# • عضویت اجباری (چند کانال) + دکمه "عضو شدم"
-# • دیپ‌لینک start برای دانلود + شمارش دانلود
-# • آمار واقعی زیر پست کانالی: ⬇️ دانلود | ↗️ اشتراک | 👁 بازدید (ریفرش)
+# • عضویت اجباری (چند کانال) + دکمه "عضو شدم" (ورودی .env نرمال‌سازی می‌شود)
+# • دیپ‌لینک start برای دانلود + شمارش دانلود (token)
+# • آمار واقعی زیر پست کانالی: ⬇️ دانلود | ↗️ اشتراک | 👁 بازدید (رفرش)
 # • ارسال فوری/زمان‌بندی یک پست کانالی (کاور + کپشن + دکمه دانلود)
 # • فلو آپلود چندمرحله‌ای (عنوان→ژانر→سال→کاور→فایل‌ها)
-# • پنل ادمین (لیست/جست‌وجو/ویرایش/حذف/جابجایی/افزودن فایل)
+# • پنل ادمین کامل (لیست/جست‌وجو/ویرایش/حذف/جابجایی/افزودن فایل)
 # • خروجی CSV
 # • حذف خودکار پیام‌های ارسالی به کاربر بعد از DELETE_DELAY ثانیه
-# -------------------------------------------------------------
+# -----------------------------------------------------------------------
 
 import os, re, json, io, csv, asyncio, logging, unicodedata, string
 from datetime import datetime
@@ -18,19 +18,18 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from bson import ObjectId
 
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.enums import ChatMemberStatus, ParseMode
 from pyrogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton
 )
-from pyrogram import idle
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ---------------------- 📜 Logging ----------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# ---------------------- ⚙️ بارگذاری env ----------------------
+# ---------------------- ⚙️ Env ----------------------
 load_dotenv()
 
 def _get_env_str(key: str, required=True, default=None):
@@ -50,6 +49,14 @@ def _get_env_int(key: str, required=True, default=None):
     except ValueError:
         raise RuntimeError(f"❌ مقدار {key} باید عدد باشد. مقدار فعلی: {v}")
 
+def _norm_channel(raw: str) -> str:
+    s = (raw or "").strip()
+    s = re.sub(r'^(?:https?://)?t\.me/+', '', s, flags=re.IGNORECASE)
+    s = s.split("?")[0].strip()
+    s = s.strip("/").lstrip("@")
+    s = re.sub(r"[^A-Za-z0-9_]", "", s)
+    return s
+
 print("🚀 در حال بارگذاری تنظیمات...")
 
 API_ID        = _get_env_int("API_ID")
@@ -63,7 +70,9 @@ WELCOME_IMAGE = _get_env_str("WELCOME_IMAGE")
 CONFIRM_IMAGE = _get_env_str("CONFIRM_IMAGE")
 DELETE_DELAY  = _get_env_int("DELETE_DELAY", required=False, default=30)
 
-REQUIRED_CHANNELS = [x.strip().lstrip("@") for x in _get_env_str("REQUIRED_CHANNELS").split(",") if x.strip()]
+_raw_required = _get_env_str("REQUIRED_CHANNELS")
+REQUIRED_CHANNELS = [c for c in (_norm_channel(x) for x in _raw_required.split(",")) if c]
+
 TARGET_CHANNELS   = {str(k): int(v) for k, v in json.loads(_get_env_str("TARGET_CHANNELS_JSON")).items()}
 
 ADMIN_IDS = [int(x.strip()) for x in _get_env_str("ADMIN_IDS").split(",") if x.strip().isdigit()]
@@ -71,24 +80,24 @@ if not ADMIN_IDS:
     raise RuntimeError("❌ ADMIN_IDS خالی است.")
 ADMIN_ID = ADMIN_IDS[0]
 
-# ری‌اکشن‌های کانال (اختیاری)
 REACTIONS = [x.strip() for x in os.getenv("REACTIONS", "👍,❤️,💔,👎").split(",") if x.strip()]
 
 print("✅ تنظیمات از محیط بارگذاری شد.")
 
-# ---------------------- 🗄️ اتصال دیتابیس ----------------------
+# ---------------------- 🗄️ DB ----------------------
 try:
     mongo_client = MongoClient(MONGO_URI)
     db = mongo_client[MONGO_DB_NAME]
     films_col        = db["films"]
     scheduled_posts  = db["scheduled_posts"]
+    settings_col     = db["settings"]
     user_sources     = db["user_sources"]
-    post_stats       = db["post_stats"]       # {film_id, channel_id, message_id, downloads, shares, views}
+    post_stats       = db["post_stats"]  # {film_id, channel_id, message_id, downloads, shares, views}
     print(f"✅ اتصال به MongoDB برقرار شد. DB = {MONGO_DB_NAME}")
 except Exception as e:
     raise RuntimeError(f"❌ خطا در اتصال به MongoDB: {e}")
 
-# ---------------------- 🤖 Pyrogram Client ----------------------
+# ---------------------- 🤖 Bot ----------------------
 bot = Client(
     "BoxUploader",
     api_id=API_ID,
@@ -98,11 +107,11 @@ bot = Client(
 )
 
 # ---------------------- 🧠 State ----------------------
-upload_data: dict[int, dict] = {}        # فلو آپلود
-schedule_data: dict[int, dict] = {}      # فلو زمان‌بندی
-admin_edit_state: dict[int, dict] = {}   # حالت ویرایش پنل ادمین
+upload_data: dict[int, dict] = {}
+schedule_data: dict[int, dict] = {}
+admin_edit_state: dict[int, dict] = {}
 
-# ---------------------- 🧰 Helper funcs ----------------------
+# ---------------------- 🧰 Helpers ----------------------
 def caption_to_buttons(caption: str):
     pattern = r'([^\n()]{1,}?)\s*\((https?://[^\s)]+)\)'
     matches = re.findall(pattern, caption)
@@ -135,7 +144,7 @@ async def delete_after_delay(client: Client, chat_id: int, message_id: int):
         await asyncio.sleep(DELETE_DELAY)
         await client.delete_messages(chat_id, message_id)
     except Exception as e:
-        print("delete_after_delay:", e)
+        logging.warning("delete_after_delay: %s", e)
 
 async def user_is_member(client: Client, uid: int) -> bool:
     for channel in REQUIRED_CHANNELS:
@@ -150,10 +159,29 @@ async def user_is_member(client: Client, uid: int) -> bool:
 def join_buttons_markup():
     rows = []
     for ch in REQUIRED_CHANNELS:
-        title = ch.lstrip("@")
-        rows.append([InlineKeyboardButton(f"📣 عضویت در @{title}", url=f"https://t.me/{title}")])
+        if not ch or not re.match(r"^[A-Za-z0-9_]{5,}$", ch):
+            continue
+        rows.append([InlineKeyboardButton(f"📣 عضویت در @{ch}", url=f"https://t.me/{ch}")])
     rows.append([InlineKeyboardButton("✅ عضو شدم", callback_data="check_membership")])
     return InlineKeyboardMarkup(rows)
+
+async def _safe_send_welcome(client: Client, chat_id: int):
+    text = ("🎬 به ربات UpBox خوش آمدید!\n\n"
+            "ابتدا لطفاً در کانال‌های زیر عضو شوید، سپس روی «✅ عضو شدم» بزنید:")
+    try:
+        await client.send_photo(chat_id, photo=WELCOME_IMAGE, caption=text, reply_markup=join_buttons_markup())
+        return
+    except Exception as e1:
+        logging.warning("welcome with keyboard failed: %s", e1)
+    try:
+        await client.send_photo(chat_id, photo=WELCOME_IMAGE, caption=text)
+        return
+    except Exception as e2:
+        logging.warning("welcome with photo failed: %s", e2)
+    try:
+        await client.send_message(chat_id, text)
+    except Exception as e3:
+        logging.error("WELCOME failed: %s", e3)
 
 def _encode_channel_id(cid: int) -> str:
     return f"{'n' if cid < 0 else 'p'}{abs(cid)}"
@@ -163,7 +191,6 @@ def _decode_channel_id(s: str) -> int:
     return sign * int(s[1:]) if s else 0
 
 def build_stats_token(film_id: str, channel_id: int, message_id: int) -> str:
-    # برای دیپ‌لینک دانلود: start=token
     return f"{film_id}__{_encode_channel_id(channel_id)}__m{message_id}__dl"
 
 def parse_stats_token(token: str):
@@ -178,13 +205,8 @@ def parse_stats_token(token: str):
     except Exception:
         return None
 
-def build_deeplink_kb(film_id: str, channel_id: int, message_id: int) -> InlineKeyboardMarkup:
-    token = build_stats_token(film_id, channel_id, message_id)
-    url = f"https://t.me/{BOT_USERNAME}?start={token}"
-    return InlineKeyboardMarkup([[InlineKeyboardButton("📥 دانلود", url=url)]])
-
 def build_stats_keyboard(film_id: str, channel_id: int, message_id: int, downloads: int, shares: int, views: int):
-    row1 = [InlineKeyboardButton("📥 برای دانلود اینجا کلیک کنید", url=f"https://t.me/{BOT_USERNAME}?start={build_stats_token(film_id, channel_id, message_id)}")]
+    row1 = [InlineKeyboardButton("📥 دانلود", url=f"https://t.me/{BOT_USERNAME}?start={build_stats_token(film_id, channel_id, message_id)}")]
     row2 = [
         InlineKeyboardButton(f"⬇️ دانلود: {downloads}", callback_data="stat:noop"),
         InlineKeyboardButton(f"↗️ اشتراک: {shares}", callback_data="stat:share"),
@@ -198,8 +220,7 @@ async def ensure_reactions(client: Client, channel_id: int):
         if REACTIONS:
             await client.set_chat_available_reactions(chat_id=channel_id, available_reactions=REACTIONS)
     except Exception as e:
-        # اجباری نیست؛ اگر اجازه نداشت، نادیده بگیر
-        print("ensure_reactions:", e)
+        logging.info("ensure_reactions skipped: %s", e)
 
 def compose_channel_caption(film: dict) -> str:
     title = film.get("title", film.get("film_id", ""))
@@ -211,7 +232,7 @@ def compose_channel_caption(film: dict) -> str:
     lines.append("👇 برای دریافت، روی دکمه دانلود بزنید.")
     return "\n".join(lines)
 
-# ---------------------- 🧪 سلامت/دیباگ ----------------------
+# ---------------------- 🧪 Health ----------------------
 @bot.on_message(filters.command("ping") & filters.private)
 async def ping_handler(client, message):
     logging.info("PING from %s", message.from_user.id)
@@ -237,12 +258,12 @@ async def _send_film_files_to_user(client: Client, chat_id: int, film_doc: dict)
 
 @bot.on_message(filters.command("start") & filters.private)
 async def start_handler(client: Client, message: Message):
+    logging.info("/start from %s text=%r", message.from_user.id, message.text)
     user_id = message.from_user.id
     parts = (message.text or "").split(maxsplit=1)
     start_param = parts[1].strip() if len(parts) == 2 else None
 
-    # اگر start به شکل توکن آماری باشد → دانلود را +1 کن
-    film_id_for_delivery = None
+    film_id_for_delivery: Optional[str] = None
     if start_param:
         parsed = parse_stats_token(start_param)
         if parsed:
@@ -254,10 +275,8 @@ async def start_handler(client: Client, message: Message):
             )
             film_id_for_delivery = fid
         else:
-            # شاید مستقیم film_id است
-            film_id_for_delivery = start_param
+            film_id_for_delivery = start_param  # maybe direct film_id
 
-    # اگر عضو است و film_id داریم → فایل‌ها را بده
     if film_id_for_delivery and await user_is_member(client, user_id):
         film = films_col.find_one({"film_id": film_id_for_delivery})
         if not film:
@@ -266,27 +285,15 @@ async def start_handler(client: Client, message: Message):
         await _send_film_files_to_user(client, message.chat.id, film)
         return
 
-    # اگر عضو نیست و لینک داریم → ذخیره کن برای بعد از تایید عضویت
     if film_id_for_delivery:
         user_sources.update_one({"user_id": user_id}, {"$set": {"from_film_id": film_id_for_delivery}}, upsert=True)
 
-    # خوش‌آمد + دکمه‌های عضویت
-    try:
-        await message.reply_photo(
-            photo=WELCOME_IMAGE,
-            caption="🎬 به ربات UpBox خوش آمدید!\n\nابتدا لطفاً در کانال‌های زیر عضو شوید، سپس روی «✅ عضو شدم» بزنید:",
-            reply_markup=join_buttons_markup()
-        )
-    except Exception:
-        await message.reply(
-            "🎬 به ربات UpBox خوش آمدید!\n\nابتدا لطفاً در کانال‌های زیر عضو شوید، سپس روی «✅ عضو شدم» بزنید:",
-            reply_markup=join_buttons_markup()
-        )
+    await _safe_send_welcome(client, message.chat.id)
 
 @bot.on_callback_query(filters.regex(r"^check_membership$"))
 async def check_membership_cb(client: Client, cq: CallbackQuery):
     user_id = cq.from_user.id
-    # چک عضویت
+    # verify
     for ch in REQUIRED_CHANNELS:
         try:
             m = await client.get_chat_member(f"@{ch}", user_id)
@@ -316,7 +323,7 @@ async def check_membership_cb(client: Client, cq: CallbackQuery):
     else:
         await client.send_message(cq.message.chat.id, "ℹ️ الان عضو شدی. برای دریافت محتوا، روی لینک داخل پست‌های کانال کلیک کن.")
 
-# ---------------------- ⬆️ فلو آپلود ادمین ----------------------
+# ---------------------- ⬆️ Upload flow ----------------------
 @bot.on_message(filters.command("upload") & filters.private & filters.user(ADMIN_IDS))
 async def upload_command(client: Client, message: Message):
     uid = message.from_user.id
@@ -327,7 +334,7 @@ async def upload_command(client: Client, message: Message):
 async def admin_text_router(client: Client, message: Message):
     uid = message.from_user.id
 
-    # فلو زمان‌بندی
+    # schedule flow
     if uid in schedule_data:
         data = schedule_data[uid]
         if data.get("step") == "date":
@@ -344,7 +351,7 @@ async def admin_text_router(client: Client, message: Message):
             return await message.reply("🎯 کانال مقصد را انتخاب کن:", reply_markup=InlineKeyboardMarkup(rows))
         return
 
-    # پنل ادمین (ویرایش/جست‌وجو)
+    # admin panel edit/search
     if uid in admin_edit_state:
         st = admin_edit_state[uid]
         mode = st.get("mode")
@@ -412,7 +419,7 @@ async def admin_text_router(client: Client, message: Message):
             return await message.reply("✅ فایل جدید اضافه شد.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ بازگشت", callback_data=f"film_files::{fid}")]]))
         return
 
-    # فلو آپلود
+    # upload flow
     if uid in upload_data:
         data = upload_data[uid]
         step = data.get("step")
@@ -422,15 +429,12 @@ async def admin_text_router(client: Client, message: Message):
             if not title:
                 return await message.reply("⚠️ عنوان خالیه! دوباره بفرست.")
             data["title"] = title
-
             base = slugify(title)
             candidate = base
             i = 2
             while films_col.find_one({"film_id": candidate}):
-                candidate = f"{base}_{i}"
-                i += 1
+                candidate = f"{base}_{i}"; i += 1
             data["film_id"] = candidate
-
             data["step"] = "awaiting_genre"
             return await message.reply("🎭 <b>ژانر</b> را وارد کن (مثال: اکشن، درام):")
 
@@ -480,12 +484,11 @@ async def admin_text_router(client: Client, message: Message):
             )
         return
 
-# رسانه‌های ادمین (کاور/فایل)
+# media router (admin)
 @bot.on_message(filters.private & filters.user(ADMIN_IDS) & (filters.photo | filters.video | filters.document | filters.audio))
 async def admin_media_router(client: Client, message: Message):
     uid = message.from_user.id
 
-    # حالت‌های ویرایش
     if uid in admin_edit_state:
         st = admin_edit_state[uid]
         mode = st.get("mode")
@@ -525,7 +528,6 @@ async def admin_media_router(client: Client, message: Message):
             st["mode"] = "file_add_caption"
             return await message.reply("📝 کپشن فایل جدید را وارد کن:")
 
-    # فلو آپلود
     if uid in upload_data:
         data = upload_data[uid]
         step = data.get("step")
@@ -576,11 +578,16 @@ async def upload_more_files_cb(client: Client, cq: CallbackQuery):
         }
         films_col.update_one({"film_id": film_id}, {"$set": film_doc}, upsert=True)
         deep_link = f"https://t.me/{BOT_USERNAME}?start={film_id}"
-        await cq.message.reply(f"✅ فیلم ذخیره شد.\n\n🎬 عنوان: {film_doc['title']}\n📂 تعداد فایل: {len(film_doc['files'])}\n🔗 لینک دانلود: {deep_link}")
-        await cq.message.reply("🕓 انتخاب کن:", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⏰ زمان‌بندی", callback_data=f"sched_yes::{film_id}")],
-            [InlineKeyboardButton("📣 ارسال فوری",   callback_data=f"sched_no::{film_id}")]
-        ]))
+        await cq.message.reply(
+            f"✅ فیلم ذخیره شد.\n\n🎬 عنوان: {film_doc['title']}\n📂 تعداد فایل: {len(film_doc['files'])}\n🔗 لینک دانلود: {deep_link}"
+        )
+        await cq.message.reply(
+            "🕓 انتخاب کن:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⏰ زمان‌بندی", callback_data=f"sched_yes::{film_id}")],
+                [InlineKeyboardButton("📣 ارسال فوری", callback_data=f"sched_no::{film_id}")]
+            ])
+        )
         upload_data.pop(uid, None)
 
 # ---------------------- زمان‌بندی/انتشار فوری ----------------------
@@ -596,6 +603,20 @@ async def sched_cancel_cb(client: Client, cq: CallbackQuery):
     await cq.answer()
     schedule_data.pop(cq.from_user.id, None)
     await cq.message.edit_text("⛔️ زمان‌بندی لغو شد.")
+
+@bot.on_callback_query(filters.regex(r"^sched_no::(.+)$") & filters.user(ADMIN_IDS))
+async def ask_publish_immediate(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    film_id = cq.data.split("::")[1]
+    rows = [[InlineKeyboardButton(title, callback_data=f"film_pub_go::{film_id}::{chat_id}")]
+            for title, chat_id in TARGET_CHANNELS.items()]
+    rows.append([InlineKeyboardButton("❌ لغو", callback_data="pub_cancel")])
+    await cq.message.reply("📣 می‌خوای همین الان ارسال کنیم؟ کانال رو انتخاب کن:", reply_markup=InlineKeyboardMarkup(rows))
+
+@bot.on_callback_query(filters.regex(r"^pub_cancel$") & filters.user(ADMIN_IDS))
+async def pub_cancel_cb(client: Client, cq: CallbackQuery):
+    await cq.answer("لغو شد.")
+    await cq.message.edit_text("🚫 ارسال فوری لغو شد.")
 
 @bot.on_callback_query(filters.regex(r"^film_sched_save::(\d{4}-\d{2}-\d{2})::(\d{2}:\d{2})::(.+)::(-?\d+)$") & filters.user(ADMIN_IDS))
 async def film_sched_save_cb(client: Client, cq: CallbackQuery):
@@ -616,37 +637,20 @@ async def film_sched_save_cb(client: Client, cq: CallbackQuery):
     schedule_data.pop(cq.from_user.id, None)
     await cq.message.edit_text("✅ زمان‌بندی ذخیره شد.")
 
-@bot.on_callback_query(filters.regex(r"^sched_no::(.+)$") & filters.user(ADMIN_IDS))
-async def ask_publish_immediate(client: Client, cq: CallbackQuery):
-    await cq.answer()
-    film_id = cq.data.split("::")[1]
-    rows = [[InlineKeyboardButton(title, callback_data=f"film_pub_go::{film_id}::{chat_id}")] for title, chat_id in TARGET_CHANNELS.items()]
-    rows.append([InlineKeyboardButton("❌ لغو", callback_data="pub_cancel")])
-    await cq.message.reply("📣 می‌خوای همین الان ارسال کنیم؟ کانال رو انتخاب کن:", reply_markup=InlineKeyboardMarkup(rows))
-
-@bot.on_callback_query(filters.regex(r"^pub_cancel$") & filters.user(ADMIN_IDS))
-async def pub_cancel_cb(client: Client, cq: CallbackQuery):
-    await cq.answer("لغو شد.")
-    await cq.message.edit_text("🚫 ارسال فوری لغو شد.")
-
 async def send_channel_post_with_stats(client: Client, film: dict, channel_id: int):
     caption = compose_channel_caption(film)
     await ensure_reactions(client, channel_id)
 
-    # اول پست را بفرستیم تا message_id داشته باشیم
     if film.get("cover_id"):
         sent = await client.send_photo(channel_id, photo=film["cover_id"], caption=caption)
     else:
         sent = await client.send_message(channel_id, text=caption)
 
-    # ذخیره آمار اولیه
     post_stats.update_one(
         {"film_id": film["film_id"], "channel_id": channel_id, "message_id": sent.id},
         {"$setOnInsert": {"downloads": 0, "shares": 0, "views": int(getattr(sent, "views", 0) or 0), "created_at": datetime.now()}},
         upsert=True
     )
-
-    # کیبورد آماری را بگذار
     s = post_stats.find_one({"film_id": film["film_id"], "channel_id": channel_id, "message_id": sent.id}) or {}
     kb = build_stats_keyboard(film["film_id"], channel_id, sent.id,
                               downloads=int(s.get("downloads",0)),
@@ -655,7 +659,7 @@ async def send_channel_post_with_stats(client: Client, film: dict, channel_id: i
     try:
         await client.edit_message_reply_markup(chat_id=channel_id, message_id=sent.id, reply_markup=kb)
     except Exception as e:
-        print("edit_message_reply_markup:", e)
+        logging.info("edit_message_reply_markup: %s", e)
 
 @bot.on_callback_query(filters.regex(r"^film_pub_go::(.+)::(-?\d+)$") & filters.user(ADMIN_IDS))
 async def film_pub_go_cb(client: Client, cq: CallbackQuery):
@@ -685,7 +689,7 @@ async def stat_share_cb(client: Client, cq: CallbackQuery):
     try:
         await client.edit_message_reply_markup(ch_id, msg_id, kb)
     except Exception as e:
-        print("share/edit kb:", e)
+        logging.info("share/edit kb: %s", e)
     try:
         chat = await client.get_chat(ch_id)
         if chat.username:
@@ -716,14 +720,14 @@ async def stat_refresh_cb(client: Client, cq: CallbackQuery):
     try:
         await client.edit_message_reply_markup(ch_id, msg_id, kb)
     except Exception as e:
-        print("refresh/edit kb:", e)
+        logging.info("refresh/edit kb: %s", e)
     await cq.answer("آمار به‌روزرسانی شد ✅", show_alert=False)
 
 @bot.on_callback_query(filters.regex(r"^stat:noop$"))
 async def stat_noop_cb(client: Client, cq: CallbackQuery):
     await cq.answer()
 
-# ---------------------- پنل ادمین (فقط بخش‌های کلیدی) ----------------------
+# ---------------------- پنل ادمین (لیست/جست‌وجو/ویرایش و...) ----------------------
 def kb_admin_main():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎬 لیست/جست‌وجوی فیلم‌ها", callback_data="admin_films_1")],
@@ -799,49 +803,285 @@ async def film_open_cb(client: Client, cq: CallbackQuery):
     ])
     await cq.message.edit_text(info, reply_markup=kb)
 
-# (سایر callbackهای پنل ادمین: فیلم/فایل/جابجایی/حذف/CSV — مشابه نسخه قبلی شما)
-# برای کوتاه شدن پاسخ، اگر لازم داری همۀ این بخش‌ها هم کامل پیست کنم، بگو تا کل پنل رو هم یک‌تکه اضافه کنم.
+@bot.on_callback_query(filters.regex(r"^film_edit_title::(.+)$") & filters.user(ADMIN_IDS))
+async def film_edit_title_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1)
+    admin_edit_state[cq.from_user.id] = {"mode": "edit_title", "film_id": fid}
+    await cq.message.edit_text("🖊 عنوان جدید را بفرست:")
 
-# ---------------------- ⏱ زمان‌بند خودکار ----------------------
+@bot.on_callback_query(filters.regex(r"^film_edit_genre::(.+)$") & filters.user(ADMIN_IDS))
+async def film_edit_genre_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1)
+    admin_edit_state[cq.from_user.id] = {"mode": "edit_genre", "film_id": fid}
+    await cq.message.edit_text("🎭 ژانر جدید را بفرست:")
+
+@bot.on_callback_query(filters.regex(r"^film_edit_year::(.+)$") & filters.user(ADMIN_IDS))
+async def film_edit_year_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1)
+    admin_edit_state[cq.from_user.id] = {"mode": "edit_year", "film_id": fid}
+    await cq.message.edit_text("📆 سال جدید را بفرست (مثلاً 2024):")
+
+@bot.on_callback_query(filters.regex(r"^film_replace_cover::(.+)$") & filters.user(ADMIN_IDS))
+async def film_replace_cover_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1)
+    admin_edit_state[cq.from_user.id] = {"mode": "replace_cover", "film_id": fid}
+    await cq.message.edit_text("🖼 عکس کاور جدید را بفرست:")
+
+@bot.on_callback_query(filters.regex(r"^film_files::(.+)$") & filters.user(ADMIN_IDS))
+async def film_files_list(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1)
+    film = films_col.find_one({"film_id": fid})
+    if not film:
+        return await cq.message.edit_text("❌ فیلم یافت نشد.", reply_markup=kb_admin_main())
+    files = film.get("files", [])
+    rows = [[InlineKeyboardButton(f"#{i+1} • کیفیت: {f.get('quality','-')}", callback_data=f"film_file_open::{fid}::{i}")] for i, f in enumerate(files)]
+    rows.append([InlineKeyboardButton("➕ افزودن فایل جدید", callback_data=f"film_file_add::{fid}")])
+    rows.append([InlineKeyboardButton("↩️ بازگشت", callback_data=f"film_open::{fid}")])
+    await cq.message.edit_text("📂 فایل‌ها:", reply_markup=InlineKeyboardMarkup(rows))
+
+@bot.on_callback_query(filters.regex(r"^film_file_open::(.+)::(\d+)$") & filters.user(ADMIN_IDS))
+async def film_file_open_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1)
+    idx = int(cq.matches[0].group(2))
+    film = films_col.find_one({"film_id": fid})
+    if not film:
+        return await cq.message.edit_text("❌ فیلم یافت نشد.", reply_markup=kb_admin_main())
+    files = film.get("files", [])
+    if idx < 0 or idx >= len(files):
+        return await cq.message.edit_text("❌ اندیس فایل نامعتبر.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ بازگشت", callback_data=f"film_files::{fid}")]]))
+    f = files[idx]
+    cap = f.get("caption", ""); q = f.get("quality", "")
+    info = f"📄 <b>فایل #{idx+1}</b>\n🎞 کیفیت: {q}\n📝 کپشن:\n{cap[:800] + ('…' if len(cap) > 800 else '')}"
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️ ویرایش کپشن", callback_data=f"file_edit_caption::{fid}::{idx}")],
+        [InlineKeyboardButton("🎞 ویرایش کیفیت", callback_data=f"file_edit_quality::{fid}::{idx}")],
+        [InlineKeyboardButton("🔁 جایگزینی فایل", callback_data=f"file_replace::{fid}::{idx}")],
+        [InlineKeyboardButton("🔼 بالا", callback_data=f"file_move_up::{fid}::{idx}"),
+         InlineKeyboardButton("🔽 پایین", callback_data=f"file_move_down::{fid}::{idx}")],
+        [InlineKeyboardButton("🗑 حذف فایل", callback_data=f"file_delete_confirm::{fid}::{idx}")],
+        [InlineKeyboardButton("↩️ بازگشت", callback_data=f"film_files::{fid}")]
+    ])
+    await cq.message.edit_text(info, reply_markup=kb)
+
+@bot.on_callback_query(filters.regex(r"^file_edit_caption::(.+)::(\d+)$") & filters.user(ADMIN_IDS))
+async def file_edit_caption_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1)
+    idx = int(cq.matches[0].group(2))
+    admin_edit_state[cq.from_user.id] = {"mode": "file_edit_caption", "film_id": fid, "file_index": idx}
+    await cq.message.edit_text("📝 کپشن جدید را بفرست:")
+
+@bot.on_callback_query(filters.regex(r"^file_edit_quality::(.+)::(\d+)$") & filters.user(ADMIN_IDS))
+async def file_edit_quality_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1)
+    idx = int(cq.matches[0].group(2))
+    admin_edit_state[cq.from_user.id] = {"mode": "file_edit_quality", "film_id": fid, "file_index": idx}
+    await cq.message.edit_text("🎞 کیفیت جدید را بفرست (مثلاً 1080p):")
+
+@bot.on_callback_query(filters.regex(r"^file_replace::(.+)::(\d+)$") & filters.user(ADMIN_IDS))
+async def file_replace_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1)
+    idx = int(cq.matches[0].group(2))
+    admin_edit_state[cq.from_user.id] = {"mode": "file_replace", "film_id": fid, "file_index": idx}
+    await cq.message.edit_text("📤 فایل جدید (ویدیو/سند/صوت) را بفرست تا جایگزین شود:")
+
+@bot.on_callback_query(filters.regex(r"^file_move_up::(.+)::(\d+)$") & filters.user(ADMIN_IDS))
+async def file_move_up_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1); idx = int(cq.matches[0].group(2))
+    film = films_col.find_one({"film_id": fid})
+    if not film: return
+    files = film.get("files", [])
+    if idx <= 0 or idx >= len(files):
+        return await cq.answer("⛔️ امکان جابجایی نیست.", show_alert=True)
+    files[idx-1], files[idx] = files[idx], files[idx-1]
+    films_col.update_one({"film_id": fid}, {"$set": {"files": files}})
+    await cq.message.edit_text("✅ جابجا شد.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ بازگشت", callback_data=f"film_files::{fid}")]]))
+
+@bot.on_callback_query(filters.regex(r"^file_move_down::(.+)::(\d+)$") & filters.user(ADMIN_IDS))
+async def file_move_down_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1); idx = int(cq.matches[0].group(2))
+    film = films_col.find_one({"film_id": fid})
+    if not film: return
+    files = film.get("files", [])
+    if idx < 0 or idx >= len(files)-1:
+        return await cq.answer("⛔️ امکان جابجایی نیست.", show_alert=True)
+    files[idx+1], files[idx] = files[idx], files[idx+1]
+    films_col.update_one({"film_id": fid}, {"$set": {"files": files}})
+    await cq.message.edit_text("✅ جابجا شد.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ بازگشت", callback_data=f"film_files::{fid}")]]))
+
+@bot.on_callback_query(filters.regex(r"^file_delete_confirm::(.+)::(\d+)$") & filters.user(ADMIN_IDS))
+async def file_delete_confirm_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1); idx = int(cq.matches[0].group(2))
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ لغو", callback_data=f"film_file_open::{fid}::{idx}")],
+        [InlineKeyboardButton("🗑 حذف", callback_data=f"file_delete::{fid}::{idx}")]
+    ])
+    await cq.message.edit_text("❗️ مطمئنی این فایل حذف شود؟", reply_markup=kb)
+
+@bot.on_callback_query(filters.regex(r"^file_delete::(.+)::(\d+)$") & filters.user(ADMIN_IDS))
+async def file_delete_do_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1); idx = int(cq.matches[0].group(2))
+    film = films_col.find_one({"film_id": fid})
+    if not film:
+        return await cq.message.edit_text("❌ فیلم یافت نشد.", reply_markup=kb_admin_main())
+    files = film.get("files", [])
+    if idx < 0 or idx >= len(files):
+        return await cq.message.edit_text("❌ اندیس فایل نامعتبر.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ بازگشت", callback_data=f"film_files::{fid}")]]))
+    files.pop(idx)
+    films_col.update_one({"film_id": fid}, {"$set": {"files": files}})
+    await cq.message.edit_text("✅ فایل حذف شد.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ بازگشت", callback_data=f"film_files::{fid}")]]))
+
+@bot.on_callback_query(filters.regex(r"^film_file_add::(.+)$") & filters.user(ADMIN_IDS))
+async def film_file_add_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1)
+    admin_edit_state[cq.from_user.id] = {"mode": "file_add_pickfile", "film_id": fid}
+    await cq.message.edit_text("📤 فایل جدید (ویدیو/سند/صوت) را بفرست:")
+
+@bot.on_callback_query(filters.regex(r"^film_delete_confirm::(.+)$") & filters.user(ADMIN_IDS))
+async def film_delete_confirm_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ لغو", callback_data=f"film_open::{fid}")],
+        [InlineKeyboardButton("🗑 حذف قطعی", callback_data=f"film_delete::{fid}")]
+    ])
+    await cq.message.edit_text("❗️ مطمئنی کل فیلم و فایل‌ها حذف شود؟", reply_markup=kb)
+
+@bot.on_callback_query(filters.regex(r"^film_delete::(.+)$") & filters.user(ADMIN_IDS))
+async def film_delete_do_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1)
+    films_col.delete_one({"film_id": fid})
+    await cq.message.edit_text("✅ فیلم حذف شد.", reply_markup=kb_admin_main())
+
+@bot.on_callback_query(filters.regex(r"^film_pub_pick::(.+)$") & filters.user(ADMIN_IDS))
+async def film_pub_pick_channel(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1)
+    rows = [[InlineKeyboardButton(title, callback_data=f"film_pub_go::{fid}::{chat_id}")]
+            for title, chat_id in TARGET_CHANNELS.items()]
+    await cq.message.edit_text(
+        "📣 کانال مقصد برای انتشار فوری را انتخاب کن:",
+        reply_markup=InlineKeyboardMarkup(rows + [[InlineKeyboardButton("↩️ بازگشت", callback_data=f"film_open::{fid}")]])
+    )
+
+@bot.on_callback_query(filters.regex(r"^film_sched_start::(.+)$") & filters.user(ADMIN_IDS))
+async def film_sched_start_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    fid = cq.matches[0].group(1)
+    schedule_data[cq.from_user.id] = {"film_id": fid, "step": "date"}
+    await cq.message.edit_text("📅 تاریخ انتشار را وارد کن (YYYY-MM-DD):")
+
+@bot.on_callback_query(filters.regex(r"^admin_sched_list_(\d+)$") & filters.user(ADMIN_IDS))
+async def admin_sched_list_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    page = int(cq.matches[0].group(1))
+    posts = list(scheduled_posts.find().sort("scheduled_time", 1))
+    page_items, total = _paginate(posts, page, 10)
+    if not page_items and page > 1:
+        return await cq.message.edit_text("⛔️ صفحه خالی است.", reply_markup=kb_admin_main())
+    rows = []
+    for p in page_items:
+        dt = p["scheduled_time"].strftime("%Y-%m-%d %H:%M")
+        rows.append([InlineKeyboardButton(f"{p.get('title','(بدون عنوان)')} • {dt}", callback_data=f"sched_open::{str(p['_id'])}")])
+    nav = []
+    if page > 1: nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"admin_sched_list_{page-1}"))
+    if page*10 < total: nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"admin_sched_list_{page+1}"))
+    if nav: rows.append(nav)
+    rows.append([InlineKeyboardButton("🏠 منو اصلی", callback_data="admin_home")])
+    await cq.message.edit_text("⏰ زمان‌بندی‌های ثبت‌شده:", reply_markup=InlineKeyboardMarkup(rows))
+
+@bot.on_callback_query(filters.regex(r"^sched_open::(.+)$") & filters.user(ADMIN_IDS))
+async def sched_open_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    sid = cq.matches[0].group(1)
+    try:
+        post = scheduled_posts.find_one({"_id": ObjectId(sid)})
+    except Exception:
+        post = None
+    if not post:
+        return await cq.message.edit_text("❌ برنامه زمان‌بندی یافت نشد.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ بازگشت", callback_data="admin_sched_list_1")]]))
+    dt = post["scheduled_time"].strftime("%Y-%m-%d %H:%M")
+    info = (f"🆔 {sid}\n🎬 {post.get('title','(بدون عنوان)')}\n📅 {dt}\n📡 کانال: {post.get('channel_id')}\n🎞 فیلم: {post.get('film_id')}")
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🗑 حذف از صف", callback_data=f"sched_delete::{sid}")],
+        [InlineKeyboardButton("↩️ بازگشت", callback_data="admin_sched_list_1")]
+    ])
+    await cq.message.edit_text(info, reply_markup=kb)
+
+@bot.on_callback_query(filters.regex(r"^sched_delete::(.+)$") & filters.user(ADMIN_IDS))
+async def sched_delete_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    sid = cq.matches[0].group(1)
+    try:
+        scheduled_posts.delete_one({"_id": ObjectId(sid)})
+        await cq.message.edit_text("✅ حذف شد.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ بازگشت", callback_data="admin_sched_list_1")]]))
+    except Exception as e:
+        await cq.message.edit_text(f"❌ خطا در حذف: {e}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ بازگشت", callback_data="admin_sched_list_1")]]))
+
+@bot.on_callback_query(filters.regex(r"^admin_export_csv$") & filters.user(ADMIN_IDS))
+async def admin_export_csv_cb(client: Client, cq: CallbackQuery):
+    await cq.answer()
+    films = list(films_col.find().sort("timestamp", -1))
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["film_id", "title", "genre", "year", "files_count", "timestamp"])
+    for f in films:
+        w.writerow([
+            f.get("film_id", ""),
+            (f.get("title", "") or "").replace("\n", " "),
+            (f.get("genre", "") or "").replace("\n", " "),
+            f.get("year", ""),
+            len(f.get("files", [])),
+            f.get("timestamp", "")
+        ])
+    buf.seek(0)
+    bio = io.BytesIO(buf.getvalue().encode("utf-8"))
+    bio.name = "films_export.csv"
+    await client.send_document(cq.message.chat.id, document=bio, caption="📥 خروجی CSV فیلم‌ها")
+
+# ---------------------- Scheduler (send queued posts) ----------------------
 async def send_scheduled_posts():
     try:
         now = datetime.now()
         posts = list(scheduled_posts.find({"scheduled_time": {"$lte": now}}))
     except Exception as e:
-        print("DB unavailable:", e)
+        logging.error("DB unavailable: %s", e)
         return
-
     for post in posts:
         try:
             film = films_col.find_one({"film_id": post["film_id"]})
             if not film:
                 scheduled_posts.delete_one({"_id": post["_id"]})
                 continue
-
             await send_channel_post_with_stats(bot, film, post["channel_id"])
             scheduled_posts.delete_one({"_id": post["_id"]})
         except Exception as e:
-            print("❌ scheduled send error:", e)
+            logging.error("❌ scheduled send error: %s", e)
             scheduled_posts.delete_one({"_id": post["_id"]})
-            continue
 
-# ---------------------- 🚀 اجرای نهایی ----------------------
+# ---------------------- 🚀 Run ----------------------
 async def _main():
-    # بوت تلگرام را روشن کن
     await bot.start()
-
-    # زمان‌بند را داخل همین event loop راه‌اندازی کن
     scheduler = AsyncIOScheduler()
     scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
     scheduler.start()
-
     print("🤖 ربات با موفقیت راه‌اندازی شد و منتظر دستورات است...")
-    # تا وقتی Ctrl+C نزنی یا سرویس خاموش نشه، زنده می‌ماند
     await idle()
-
-    # خاموشی تمیز
     await bot.stop()
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(_main())
