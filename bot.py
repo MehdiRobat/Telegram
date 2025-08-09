@@ -24,7 +24,7 @@ from pyrogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton
 )
-
+from pyrogram import idle
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ---------------------- 📜 Logging ----------------------
@@ -825,12 +825,23 @@ async def send_scheduled_posts():
             scheduled_posts.delete_one({"_id": post["_id"]})
             continue
 
-# راه‌اندازی زمان‌بند
-scheduler = AsyncIOScheduler()
-scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
-scheduler.start()
-
 # ---------------------- 🚀 اجرای نهایی ----------------------
-if __name__ == "__main__":
+async def _main():
+    # بوت تلگرام را روشن کن
+    await bot.start()
+
+    # زمان‌بند را داخل همین event loop راه‌اندازی کن
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
+    scheduler.start()
+
     print("🤖 ربات با موفقیت راه‌اندازی شد و منتظر دستورات است...")
-    bot.run()
+    # تا وقتی Ctrl+C نزنی یا سرویس خاموش نشه، زنده می‌ماند
+    await idle()
+
+    # خاموشی تمیز
+    await bot.stop()
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(_main())
