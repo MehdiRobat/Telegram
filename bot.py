@@ -1481,7 +1481,7 @@ async def main():
         print("⚠️ deleteWebhook (HTTP) error:", e)
 
     # استارت بات (همین event loop)
-    await bot.start()
+    
 
     # جاب‌ها
     scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
@@ -1493,16 +1493,7 @@ async def main():
     # نگه‌دار
     await idle()
 
-    # شات‌دان تمیز
-    print("🛑 Stopping...")
-    try:
-        scheduler.shutdown(wait=False)
-        print("📅 Scheduler shutdown.")
-    except Exception:
-        pass
-    await bot.stop()
-
+    
 # ---------------------- ▶️ اجرای نهایی ----------------------
 if __name__ == "__main__":
-    # توجه: تابع را پاس می‌دهیم (پرانتز نگذار)
-    bot.run(main)
+    bot.run(main())  # ✅ حتما با پرانتز
