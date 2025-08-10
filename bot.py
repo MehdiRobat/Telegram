@@ -18,6 +18,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import logging
 import json
 from pyrogram.enums import ParseMode
+from typing import Optional
 
 # ---------------------- ⚙️ بارگذاری env ----------------------
 load_dotenv()
