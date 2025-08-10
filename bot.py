@@ -1322,10 +1322,10 @@ async def stat_share_cb(client: Client, cq: CallbackQuery):
 from pyrogram import idle
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-scheduler = AsyncIOScheduler()  # عمداً event_loop تعیین نکن
+scheduler = AsyncIOScheduler()
 
 async def main():
-    # پاک کردن وبهوک تا polling داشته باشیم (اختیاری)
+    # پاک کردن وبهوک (اختیاری)
     try:
         import urllib.request
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
@@ -1334,19 +1334,22 @@ async def main():
     except Exception as e:
         print("⚠️ deleteWebhook (HTTP) error:", e)
 
-    # نمایش هویت ربات برای اطمینان از توکن/اتصال
+    # ✅ باید قبل از هر فراخوانی API، کلاینت را استارت کنیم
+    await bot.start()
+
+    # (اختیاری) تست هویت
     me = await bot.get_me()
     print(f"🆔 Logged in as @{me.username} ({me.id})")
 
-    # فقط جاب‌ها را استارت بده
+    # جاب‌ها
     scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
     scheduler.add_job(refresh_stats_job,    "interval", minutes=2)
     scheduler.start()
     print("📅 Scheduler started successfully!")
     print("🤖 Bot started. Waiting for updates…")
 
-    # نگه داشتن برنامه (Pyrogram خودش start/stop را مدیریت می‌کند)
+    # نگه‌دار
     await idle()
 
 if __name__ == "__main__":
-    bot.run(main())  # حتماً با پرانتز
+    bot.run(main())   # همین بماند
