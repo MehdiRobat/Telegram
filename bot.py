@@ -1155,19 +1155,44 @@ async def send_scheduled_posts():
             scheduled_posts.delete_one({"_id": post["_id"]})
             continue
 
-# ---------------------- ⏱ تنظیم Scheduler ----------------------
-scheduler = AsyncIOScheduler()
-scheduler.add_job(send_scheduled_posts, "interval", minutes=1, next_run_time=datetime.now())
+from pyrogram import idle
 
-# ---------------------- 🚀 اجرای نهایی ----------------------
-async def main():
-    await bot.start()
-    scheduler.start()
-    print("✅ Scheduler started")
-    await idle()
-    scheduler.shutdown(wait=False)
-    await bot.stop()
-    print("👋 Bot stopped cleanly")
+async def runner():
+    # پاک‌کردن وبهوک تا آپدیت‌ها با polling بیاد
+    try:
+        import urllib.request
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
+        with urllib.request.urlopen(url, timeout=10) as r:
+            print(f"🧹 Webhook delete HTTP status: {r.status}")
+    except Exception as e:
+        print("⚠️ deleteWebhook (HTTP) error:", e)
+
+    # Scheduler را روی همان event loop فعلی بساز
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    loop = asyncio.get_running_loop()
+    scheduler = AsyncIOScheduler(event_loop=loop)
+
+    # فقط خودِ کوروتین‌ها را ثبت کن (بدون create_task/lambda)
+    scheduler.add_job(
+        send_scheduled_posts,
+        "interval",
+        minutes=1,
+        next_run_time=datetime.now(),
+        coalesce=True,
+        misfire_grace_time=60
+    )
+
+    try:
+        scheduler.start()
+        print("📅 Scheduler started successfully!")
+        await idle()
+    finally:
+        try:
+            scheduler.shutdown(wait=False)
+            print("📅 Scheduler shutdown.")
+        except Exception:
+            pass
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Pyrogram خودش loop را مدیریت می‌کند
+    bot.run(runner())
