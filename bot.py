@@ -10,13 +10,12 @@
 #   4) کران‌جاب‌ها با datetime.utcnow() مقایسه می‌شوند تا دقیق اجرا شوند.
 
 import os, re, json, asyncio, io, csv, unicodedata, string
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-
 from pymongo import MongoClient
 from bson import ObjectId
 
@@ -608,31 +607,43 @@ async def sched_cancel_cb(client: Client, cq: CallbackQuery):
     schedule_data.pop(cq.from_user.id, None)
     await cq.message.edit_text("⛔️ زمان‌بندی لغو شد.")
 
-@bot.on_callback_query(filters.regex(r"^film_sched_save::(\d{4}-\d{2}-\d{2})::(\d{2}:\d{2})::(.+)::(-?\d+)$") & filters.user(ADMIN_IDS))
-async def film_sched_save_cb(client: Client, cq: CallbackQuery):
-    """ذخیره‌ی زمان‌بندی: ورودی محلی → ذخیره در UTC"""
+# ⚠️ این هندلر جدید جایگزین film_sched_save قبلی شده است
+@bot.on_callback_query(filters.regex(r"^sched_pick::(-?\d+)$") & filters.user(ADMIN_IDS))
+async def sched_pick_cb(client: Client, cq: CallbackQuery):
+    """ثبت زمان‌بندی: date/time/film_id از schedule_data؛ ذخیره در UTC (naive)"""
     await cq.answer()
-    date_str, time_str, film_id, channel_id = cq.matches[0].groups()
-    channel_id = int(channel_id)
+    uid = cq.from_user.id
+    st = schedule_data.get(uid)
+    if not st or st.get("step") not in ("channel_await", "pick_channel"):
+        return await cq.message.edit_text("⛔️ اطلاعات زمان‌بندی منقضی شده. دوباره زمان‌بندی کن.")
+
+    chat_id  = int(cq.matches[0].group(1))
+    date_str = st.get("date")
+    time_str = st.get("time")
+    film_id  = st.get("film_id")
+
+    # تبدیل از منطقه‌زمانی کاربر (TIMEZONE) به UTC و ذخیره به صورت naive
     try:
-        local_dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-        aware_local = local_dt.replace(tzinfo=ZoneInfo(TIMEZONE))
-        dt = aware_local.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)  # UTC naive برای Mongo
+        local_dt     = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+        aware_local  = local_dt.replace(tzinfo=ZoneInfo(TIMEZONE))
+        dt_utc_naive = aware_local.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
     except ValueError:
         return await cq.answer("❌ تاریخ/ساعت نامعتبر.", show_alert=True)
 
     film = films_col.find_one({"film_id": film_id})
     if not film:
+        schedule_data.pop(uid, None)
         return await cq.answer("⚠️ فیلم پیدا نشد.", show_alert=True)
 
     scheduled_posts.insert_one({
         "film_id": film_id,
         "title": film.get("title", ""),
-        "channel_id": channel_id,
-        "scheduled_time": dt  # UTC
+        "channel_id": chat_id,
+        "scheduled_time": dt_utc_naive  # UTC naive
     })
-    schedule_data.pop(cq.from_user.id, None)
+    schedule_data.pop(uid, None)
     await cq.message.edit_text("✅ زمان‌بندی ذخیره شد.")
+
 
 # ---------------------- انتشار فوری به کانال ----------------------
 @bot.on_callback_query(filters.regex(r"^film_pub_go::(.+)::(-?\d+)$") & filters.user(ADMIN_IDS))
