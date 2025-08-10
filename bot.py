@@ -17,6 +17,7 @@ from pymongo import MongoClient
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import logging
 import json
+from pyrogram.enums import ParseMode
 
 # ---------------------- ⚙️ بارگذاری env ----------------------
 load_dotenv()
