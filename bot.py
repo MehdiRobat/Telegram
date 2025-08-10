@@ -7,18 +7,25 @@
 # ---------------------- 📦 ایمپورت کتابخانه‌ها ----------------------
 import os
 import re
-import asyncio
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-from pyrogram import Client, filters, idle   # ⬅ همینجا اضافه می‌کنی
-from pyrogram.enums import ChatMemberStatus
-from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from pymongo import MongoClient
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import logging
+import io
+import csv
 import json
-from pyrogram.enums import ParseMode
+import asyncio
+from datetime import datetime
 from typing import Optional
+
+from dotenv import load_dotenv
+from pymongo import MongoClient
+from bson import ObjectId
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+from pyrogram import Client, filters, idle
+from pyrogram.enums import ChatMemberStatus, ParseMode
+from pyrogram.types import (
+    Message, CallbackQuery,
+    InlineKeyboardMarkup, InlineKeyboardButton
+)
 
 # ---------------------- ⚙️ بارگذاری env ----------------------
 load_dotenv()
@@ -54,8 +61,8 @@ WELCOME_IMAGE = _get_env_str("WELCOME_IMAGE")
 CONFIRM_IMAGE = _get_env_str("CONFIRM_IMAGE")
 DELETE_DELAY  = _get_env_int("DELETE_DELAY", required=False, default=30)
 
-# کانال‌های اجباری (با یا بدون @)
-REQUIRED_CHANNELS = [x.strip().lstrip("@") for x in _get_env_str("REQUIRED_CHANNELS").split(",") if x.strip()]
+# کانال‌های اجباری (با یا بدون @) — اختیاریش کردیم تا /start گیر نکنه
+REQUIRED_CHANNELS = [x.strip().lstrip("@") for x in _get_env_str("REQUIRED_CHANNELS", required=False, default="").split(",") if x.strip()]
 
 # کانال‌های مقصد برای انتشار پست کانالی (عنوان → chat_id)
 # مثال در .env:
@@ -226,46 +233,65 @@ async def ensure_reactions(client: Client, channel_id: int):
     except Exception as e:
         print(f"ℹ️ نتوانستم ری‌اکشن‌ها را برای {channel_id} ست کنم: {e}")
 
+# ---------------------- /start پینگ (عیب‌یابی) ----------------------
+@bot.on_message(filters.private & filters.incoming & filters.command("start"), group=-1)
+async def __start_ping__(client: Client, message: Message):
+    try:
+        print(f"📥 /start from {message.from_user.id} text={message.text!r}")
+        await message.reply("✅ بات فعاله. دارم درخواستت رو پردازش می‌کنم…")
+    except Exception as e:
+        print("❌ start ping error:", e)
+
 # ---------------------- 🚪 START + Membership ----------------------
 @bot.on_message(filters.command("start") & filters.private, group=0)
 async def start_handler(client: Client, message: Message):
-    user_id = message.from_user.id
-    parts = message.text.split(maxsplit=1)
-    film_id = parts[1].strip() if len(parts) == 2 else None
-
-    if film_id:
-        parsed = parse_deeplink_token(film_id)
-        if parsed:
-            fid, cid, mid = parsed
-            post_stats.update_one(
-                {"film_id": fid, "channel_id": cid, "message_id": mid},
-                {"$inc": {"downloads": 1}},
-                upsert=True
-            )
-            film_id = fid
-
-    if film_id and await user_is_member(client, user_id):
-        film = films_col.find_one({"film_id": film_id})
-        if not film:
-            await message.reply("❌ لینک فایل معتبر نیست یا فیلم پیدا نشد.")
-            return
-        await _send_film_files_to_user(client, message.chat.id, film)
-        return
-
-    if film_id:
-        user_sources.update_one({"user_id": user_id}, {"$set": {"from_film_id": film_id}}, upsert=True)
-
     try:
-        await message.reply_photo(
-            photo=WELCOME_IMAGE,
-            caption="🎬 به ربات UpBox خوش آمدید!\n\nابتدا لطفاً در کانال‌های زیر عضو شوید، سپس روی «✅ عضو شدم» بزنید:",
-            reply_markup=join_buttons_markup()
-        )
-    except Exception:
-        await message.reply(
-            "🎬 به ربات UpBox خوش آمدید!\n\nابتدا لطفاً در کانال‌های زیر عضو شوید، سپس روی «✅ عضو شدم» بزنید:",
-            reply_markup=join_buttons_markup()
-        )
+        user_id = message.from_user.id
+        parts = message.text.split(maxsplit=1)
+        film_id = parts[1].strip() if len(parts) == 2 else None
+
+        if film_id:
+            parsed = parse_deeplink_token(film_id)
+            if parsed:
+                fid, cid, mid = parsed
+                post_stats.update_one(
+                    {"film_id": fid, "channel_id": cid, "message_id": mid},
+                    {"$inc": {"downloads": 1}},
+                    upsert=True
+                )
+                film_id = fid
+
+        force_join_enabled = bool(REQUIRED_CHANNELS)
+
+        if film_id and (not force_join_enabled or await user_is_member(client, user_id)):
+            film = films_col.find_one({"film_id": film_id})
+            if not film:
+                return await message.reply("❌ لینک فایل معتبر نیست یا فیلم پیدا نشد.")
+            return await _send_film_files_to_user(client, message.chat.id, film)
+
+        if film_id:
+            user_sources.update_one({"user_id": user_id}, {"$set": {"from_film_id": film_id}}, upsert=True)
+
+        if force_join_enabled:
+            try:
+                await message.reply_photo(
+                    photo=WELCOME_IMAGE,
+                    caption="🎬 به ربات UpBox خوش آمدید!\n\nابتدا لطفاً در کانال‌های زیر عضو شوید، سپس روی «✅ عضو شدم» بزنید:",
+                    reply_markup=join_buttons_markup()
+                )
+            except Exception:
+                await message.reply(
+                    "🎬 به ربات UpBox خوش آمدید!\n\nابتدا لطفاً در کانال‌های زیر عضو شوید، سپس روی «✅ عضو شدم» بزنید:",
+                    reply_markup=join_buttons_markup()
+                )
+        else:
+            await message.reply("🎬 به ربات UpBox خوش آمدید!\n\nمی‌توانید از لینک‌های داخل کانال‌ها استفاده کنید.")
+    except Exception as e:
+        print("❌ start_handler error:", e)
+        try:
+            await message.reply("⚠️ خطایی رخ داد، لطفاً دوباره امتحان کن.")
+        except:
+            pass
 
 @bot.on_callback_query(filters.regex(r"^check_membership$"))
 async def check_membership_cb(client: Client, cq: CallbackQuery):
@@ -321,7 +347,7 @@ async def _send_film_files_to_user(client: Client, chat_id: int, film_doc: dict)
     warn = await client.send_message(chat_id, "⚠️ فایل‌ها تا ۳۰ ثانیه دیگر حذف می‌شوند، لطفاً سریعاً ذخیره کنید.")
     asyncio.create_task(delete_after_delay(client, warn.chat.id, warn.id))
 
-# ---------------------- ⬆️ شروع آپلود ادمین (گروه 0) ----------------------
+# ---------------------- ⬆️ شروع آپلود ادمین ----------------------
 @bot.on_message(filters.command("upload") & filters.private & filters.user(ADMIN_IDS), group=0)
 async def upload_command(client: Client, message: Message):
     uid = message.from_user.id
@@ -525,7 +551,7 @@ async def admin_media_router(client: Client, message: Message):
 
         if mode == "replace_cover":
             if not message.photo:
-                return await message.reply("⚠️ لطفاً عکس کاور بفرست.")
+                return await message.reply("⚠️ لطفاً <b>عکس کاور</b> بفرست.")
             cover_id = message.photo.file_id
             films_col.update_one({"film_id": film_id}, {"$set": {"cover_id": cover_id}})
             admin_edit_state.pop(uid, None)
@@ -571,7 +597,7 @@ async def admin_media_router(client: Client, message: Message):
 
         if step == "awaiting_cover":
             if not message.photo:
-                return await message.reply("⚠️ لطفاً <ب>عکس کاور</ب> بفرست.")
+                return await message.reply("⚠️ لطفاً <b>عکس کاور</b> بفرست.")
             data["cover_id"] = message.photo.file_id
             data["step"] = "awaiting_first_file"
             return await message.reply("📤 کاور ثبت شد. حالا <b>فایلِ اول</b> را بفرست (ویدیو/سند/صوت).")
@@ -619,8 +645,7 @@ async def upload_more_files_cb(client: Client, cq: CallbackQuery):
         deep_link = f"https://t.me/{BOT_USERNAME}?start={film_id}"
         await cq.message.reply(f"✅ فیلم ذخیره شد.\n\n🎬 عنوان: {film_doc['title']}\n📂 تعداد فایل: {len(film_doc['files'])}\n🔗 لینک: {deep_link}")
 
-        # پس از ذخیره، پیشنهاد زمان‌بندی یا ارسال فوری (با کلیدهای کوتاه)
-        # ساخت state برای ارسال فوری
+        # پیشنهاد زمان‌بندی یا ارسال فوری (با کلیدهای کوتاه)
         opts = {}
         rows = []
         for i, (title, chat_id) in enumerate(TARGET_CHANNELS.items(), start=1):
@@ -698,7 +723,6 @@ async def sched_pick_cb(client: Client, cq: CallbackQuery):
     await cq.message.edit_text("✅ زمان‌بندی ذخیره شد.")
 
 # ---------------------- ارسال فوری (با کلید کوتاه) ----------------------
-# از پنل فیلم هم استفاده می‌کنیم
 @bot.on_callback_query(filters.regex(r"^film_pub_pick::(.+)$") & filters.user(ADMIN_IDS))
 async def film_pub_pick_channel(client: Client, cq: CallbackQuery):
     await cq.answer(); fid = cq.matches[0].group(1)
@@ -713,7 +737,6 @@ async def film_pub_pick_channel(client: Client, cq: CallbackQuery):
     publish_pick[uid] = {"film_id": fid, "channel_options": opts}
     await cq.message.edit_text("📣 کانال مقصد برای انتشار فوری را انتخاب کن:", reply_markup=InlineKeyboardMarkup(rows))
 
-# هندلر اصلی انتخاب کانال فوری: pp:<index>
 @bot.on_callback_query(filters.regex(r"^pp:(\d+)$") & filters.user(ADMIN_IDS))
 async def pub_pick_cb(client: Client, cq: CallbackQuery):
     await cq.answer()
@@ -1117,6 +1140,7 @@ async def send_scheduled_posts():
             year     = film.get("year", "")
             cover_id = film.get("cover_id")
 
+            # کیفیت‌ها برای نمایش
             qualities = []
             for f in film.get("files", []):
                 q = (f.get("quality") or "").strip()
@@ -1124,6 +1148,7 @@ async def send_scheduled_posts():
                     qualities.append(q)
             qualities_text = f"💬 کیفیت‌ها: {', '.join(qualities)}" if qualities else ""
 
+            # کپشن
             caption_parts = [f"🎬 <b>{title}</b>"]
             if genre:
                 caption_parts.append(f"🎭 ژانر: {genre}")
@@ -1133,20 +1158,26 @@ async def send_scheduled_posts():
                 caption_parts.append(qualities_text)
             caption = "\n".join(caption_parts).strip()
 
+            # ری‌اکشن‌ها
             await ensure_reactions(bot, post["channel_id"])
 
+            # ارسال پست
             if cover_id:
                 sent = await bot.send_photo(chat_id=post["channel_id"], photo=cover_id, caption=caption)
             else:
                 sent = await bot.send_message(chat_id=post["channel_id"], text=caption)
 
+            # ثبت آمار اولیه
             post_stats.update_one(
                 {"film_id": post["film_id"], "channel_id": post["channel_id"], "message_id": sent.id},
                 {"$setOnInsert": {"downloads": 0, "shares": 0, "views": 0, "created_at": datetime.now()}},
                 upsert=True
             )
 
+            # دکمه‌های آمار و دانلود
             await update_post_stats_markup(bot, post["film_id"], post["channel_id"], sent.id)
+
+            # حذف از صف
             scheduled_posts.delete_one({"_id": post["_id"]})
 
         except Exception as e:
@@ -1154,7 +1185,9 @@ async def send_scheduled_posts():
             scheduled_posts.delete_one({"_id": post["_id"]})
             continue
 
+# ---------------------- 🚀 Runner (polling + scheduler) ----------------------
 async def runner():
+    # پاک‌کردن وبهوک برای دریافت آپدیت با polling
     try:
         import urllib.request
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
@@ -1163,14 +1196,22 @@ async def runner():
     except Exception as e:
         print("⚠️ deleteWebhook (HTTP) error:", e)
 
+    # Scheduler را داخل همان event loop بساز
     loop = asyncio.get_running_loop()
     scheduler = AsyncIOScheduler(event_loop=loop)
-    scheduler.add_job(send_scheduled_posts, "interval", minutes=1, next_run_time=datetime.now())
+    scheduler.add_job(
+        send_scheduled_posts,
+        "interval",
+        minutes=1,
+        next_run_time=datetime.now(),
+        coalesce=True,
+        misfire_grace_time=60
+    )
 
     try:
         scheduler.start()
         print("✅ Scheduler started successfully!")
-        await idle()
+        await idle()   # لانگ‌پولینگ Pyrogram
     finally:
         try:
             scheduler.shutdown(wait=False)
@@ -1179,4 +1220,5 @@ async def runner():
             pass
 
 if __name__ == "__main__":
+    # Pyrogram خودش start/stop و loop را مدیریت می‌کند
     bot.run(runner())
