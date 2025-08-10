@@ -251,6 +251,14 @@ async def _send_film_files_to_user(client: Client, chat_id: int, film_doc: dict)
     asyncio.create_task(delete_after_delay(client, warn.chat.id, warn.id))
 
 # ---------------------- 🚪 START + Membership ----------------------
+@bot.on_message(filters.private & ~filters.command("start"))
+async def _debug_dm(client: Client, message: Message):
+    print("📩 DM:", message.from_user.id, repr(message.text))
+    try:
+        await message.reply("✅ alive (debug)")
+    except Exception as e:
+        print("❌ reply error:", e)
+
 @bot.on_message(filters.command("start") & filters.private)
 async def start_handler(client: Client, message: Message):
     """
