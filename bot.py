@@ -20,7 +20,7 @@
 import os, re, json, asyncio, io, csv, unicodedata, string
 from datetime import datetime
 from dotenv import load_dotenv
-
+from zoneinfo import ZoneInfo 
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus, ParseMode
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -38,6 +38,7 @@ for p in (DATA_DIR, SESSION_DIR, LOG_DIR, EXPORTS_DIR):
 
 # ---------------------- ⚙️ بارگذاری env ----------------------
 load_dotenv()
+TIMEZONE = os.getenv("TIMEZONE", "Europe/Berlin")  # ⬅️ این خط
 
 # 👇 این دو خط را دقیقاً بعد از load_dotenv بگذار
 SESSION_DIR = os.getenv("SESSION_DIR", "./.sessions")
