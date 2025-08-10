@@ -6,8 +6,8 @@
 # نکته‌ها:
 #   1) film_id از روی عنوان ساخته می‌شود (slug) و در صورت تکرار، شماره انتهایی می‌خورد.
 #   2) Pyrogram v2 پیش‌فرض parse_mode = HTML دارد؛ نیازی به ست‌کردن دستی نیست.
-#   3) برای زمان‌بندی: ورودی تاریخ/ساعت بر اساس TIMEZONE تفسیر می‌شود و در DB به UTC ذخیره می‌گردد.
-#   4) کران‌جاب‌ها با datetime.utcnow() مقایسه می‌شوند تا دقیق اجرا شوند.
+#   3) برای زمان‌بندی: ورودی تاریخ/ساعت بر اساس TIMEZONE تفسیر می‌شود و در DB به UTC ذخیره می‌گردد (naive).
+#   4) کران‌جاب‌ها با datetime.now(timezone.utc).replace(tzinfo=None) مقایسه می‌شوند (بدون هشدارهای deprecation).
 
 import os, re, json, asyncio, io, csv, unicodedata, string
 from datetime import datetime, timezone
@@ -134,6 +134,8 @@ def compose_channel_caption(film: dict) -> str:
     lines.append("👇 برای دریافت، روی دکمه دانلود بزنید.")
     return "\n".join(lines)
 
+# ⚠️ Callback data کوتاه برای جلوگیری از BUTTON_DATA_INVALID
+# به جای حمل film_id، فقط channel_id و message_id را می‌فرستیم و از post_refs می‌خوانیم.
 def _stats_keyboard(film_id: str, channel_id: int, message_id: int, views=None):
     st = stats_col.find_one({"film_id": film_id}) or {}
     dl = int(st.get("downloads", 0))
@@ -142,13 +144,13 @@ def _stats_keyboard(film_id: str, channel_id: int, message_id: int, views=None):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📥 دانلود", url=f"https://t.me/{BOT_USERNAME}?start={film_id}")],
         [
-            InlineKeyboardButton(f"👁 {v}",  callback_data=f"stat_refresh::{film_id}::{channel_id}::{message_id}"),
-            InlineKeyboardButton(f"📥 {dl}", callback_data=f"stat_refresh::{film_id}::{channel_id}::{message_id}"),
-            InlineKeyboardButton(f"🔁 {sh}", callback_data=f"stat_share::{film_id}::{channel_id}::{message_id}")
+            InlineKeyboardButton(f"👁 {v}",  callback_data=f"sr::{channel_id}::{message_id}"),
+            InlineKeyboardButton(f"📥 {dl}", callback_data=f"sr::{channel_id}::{message_id}"),
+            InlineKeyboardButton(f"🔁 {sh}", callback_data=f"ss::{channel_id}::{message_id}")
         ]
     ])
 
-async def _delayed_stat_refresh(client, film_id: str, channel_id: int, message_id: int, delay_sec: int = 10):
+async def _delayed_stat_refresh(client: Client, film_id: str, channel_id: int, message_id: int, delay_sec: int = 10):
     try:
         await asyncio.sleep(delay_sec)
         try:
@@ -306,18 +308,22 @@ async def admin_text_router(client: Client, message: Message):
     # 1) زمان‌بندی
     if uid in schedule_data:
         data = schedule_data[uid]
+
+        # دریافت تاریخ
         if data.get("step") == "date":
             data["date"] = message.text.strip()
             data["step"] = "time"
             return await message.reply("🕒 ساعت انتشار را وارد کن (HH:MM):")
+
+        # دریافت ساعت → انتخاب کانال با callback کوتاه: sched_pick::<chat_id>
         if data.get("step") == "time":
             data["time"] = message.text.strip()
-            prefix = f"film_sched_save::{data['date']}::{data['time']}"
-            rows = [[InlineKeyboardButton(title, callback_data=f"{prefix}::{data['film_id']}::{chat_id}")]
+            data["step"] = "channel_await"
+            rows = [[InlineKeyboardButton(title, callback_data=f"sched_pick::{chat_id}")]
                     for title, chat_id in TARGET_CHANNELS.items()]
             rows.append([InlineKeyboardButton("❌ لغو", callback_data="sched_cancel")])
-            data["step"] = "channel_await"
             return await message.reply("🎯 کانال مقصد را انتخاب کن:", reply_markup=InlineKeyboardMarkup(rows))
+
         return
 
     # 2) حالت‌های پنل ادمین
@@ -532,7 +538,7 @@ async def admin_media_router(client: Client, message: Message):
                 return await message.reply("⚠️ فقط ویدیو/سند/صوت قبول است. دوباره بفرست.")
             data["pending_file_id"] = file_id
             data["step"] = "awaiting_caption"
-            return await message.reply("📝 <b>کپشن</b> این فایل را وارد کن:")
+            return await message.reply("📝 <ب>کپشن</ب> این فایل را وارد کن:")
         return
 
 # ---------------------- ادامه/پایان آپلود (دکمه‌ها) ----------------------
@@ -560,7 +566,7 @@ async def upload_more_files_cb(client: Client, cq: CallbackQuery):
             "genre": data.get("genre", ""),
             "year": data.get("year", ""),
             "cover_id": data.get("cover_id"),
-            "timestamp": datetime.utcnow(),  # ذخیره به UTC
+            "timestamp": datetime.now(timezone.utc).replace(tzinfo=None),  # UTC naive
             "files": data["files"]
         }
         films_col.update_one({"film_id": film_id}, {"$set": film_doc}, upsert=True)
@@ -607,7 +613,7 @@ async def sched_cancel_cb(client: Client, cq: CallbackQuery):
     schedule_data.pop(cq.from_user.id, None)
     await cq.message.edit_text("⛔️ زمان‌بندی لغو شد.")
 
-# ⚠️ این هندلر جدید جایگزین film_sched_save قبلی شده است
+# ثبت زمان‌بندی با callback کوتاه
 @bot.on_callback_query(filters.regex(r"^sched_pick::(-?\d+)$") & filters.user(ADMIN_IDS))
 async def sched_pick_cb(client: Client, cq: CallbackQuery):
     """ثبت زمان‌بندی: date/time/film_id از schedule_data؛ ذخیره در UTC (naive)"""
@@ -622,7 +628,7 @@ async def sched_pick_cb(client: Client, cq: CallbackQuery):
     time_str = st.get("time")
     film_id  = st.get("film_id")
 
-    # تبدیل از منطقه‌زمانی کاربر (TIMEZONE) به UTC و ذخیره به صورت naive
+    # تبدیل از منطقه‌زمانی به UTC و ذخیره‌ی naive
     try:
         local_dt     = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
         aware_local  = local_dt.replace(tzinfo=ZoneInfo(TIMEZONE))
@@ -644,7 +650,6 @@ async def sched_pick_cb(client: Client, cq: CallbackQuery):
     schedule_data.pop(uid, None)
     await cq.message.edit_text("✅ زمان‌بندی ذخیره شد.")
 
-
 # ---------------------- انتشار فوری به کانال ----------------------
 @bot.on_callback_query(filters.regex(r"^film_pub_go::(.+)::(-?\d+)$") & filters.user(ADMIN_IDS))
 async def film_pub_go_cb(client: Client, cq: CallbackQuery):
@@ -662,7 +667,7 @@ async def film_pub_go_cb(client: Client, cq: CallbackQuery):
                 channel_id,
                 photo=film["cover_id"],
                 caption=caption,
-                reply_markup=_stats_keyboard(film_id, channel_id, 0)
+                reply_markup=_stats_keyboard(film_id, channel_id, 0)  # بعداً message_id را ست می‌کنیم
             )
         else:
             sent = await client.send_message(
@@ -673,6 +678,7 @@ async def film_pub_go_cb(client: Client, cq: CallbackQuery):
     except Exception as e:
         return await cq.message.edit_text(f"❌ خطا در ارسال: {e}")
 
+    # مرجع پیام برای رفرش و آمار
     try:
         post_refs.update_one(
             {"film_id": film_id, "channel_id": channel_id},
@@ -682,6 +688,7 @@ async def film_pub_go_cb(client: Client, cq: CallbackQuery):
     except Exception:
         pass
 
+    # آپدیت اولیه views
     try:
         fresh = await client.get_messages(channel_id, sent.id)
         await client.edit_message_reply_markup(
@@ -692,6 +699,7 @@ async def film_pub_go_cb(client: Client, cq: CallbackQuery):
     except Exception:
         pass
 
+    # رفرش نرم
     asyncio.create_task(_delayed_stat_refresh(client, film_id, channel_id, sent.id, 10))
     await cq.message.edit_text("✅ پست ارسال شد (کاور + دکمه دانلود + آمار).")
 
@@ -1048,7 +1056,7 @@ async def admin_export_csv_cb(client: Client, cq: CallbackQuery):
 # ---------------------- ⏱ زمان‌بند خودکار (1 پست کانالی) ----------------------
 async def send_scheduled_posts():
     try:
-        now = datetime.utcnow()  # هم‌تراز با UTC ذخیره‌شده
+        now = datetime.now(timezone.utc).replace(tzinfo=None)  # UTC naive
         posts = list(scheduled_posts.find({"scheduled_time": {"$lte": now}}))
     except Exception as e:
         print("DB unavailable:", e)
@@ -1076,6 +1084,7 @@ async def send_scheduled_posts():
                     reply_markup=_stats_keyboard(film["film_id"], post["channel_id"], 0)
                 )
 
+            # مرجع پیام
             try:
                 post_refs.update_one(
                     {"film_id": film["film_id"], "channel_id": post["channel_id"]},
@@ -1085,6 +1094,7 @@ async def send_scheduled_posts():
             except Exception:
                 pass
 
+            # آپدیت اولیه views
             try:
                 fresh = await bot.get_messages(post["channel_id"], sent.id)
                 await bot.edit_message_reply_markup(
@@ -1095,6 +1105,7 @@ async def send_scheduled_posts():
             except Exception:
                 pass
 
+            # رفرش نرم
             asyncio.create_task(_delayed_stat_refresh(bot, film["film_id"], post["channel_id"], sent.id, 10))
 
         except Exception as e:
@@ -1103,43 +1114,15 @@ async def send_scheduled_posts():
         scheduled_posts.delete_one({"_id": post["_id"]})
 
 # ====== رفرش دوره‌ای آمار ======
-async def refresh_stats_job():
-    try:
-        refs = list(post_refs.find({}))
-    except Exception as e:
-        print("DB unavailable (post_refs):", e)
-        return
-
-    for ref in refs:
-        film_id    = ref.get("film_id")
-        channel_id = ref.get("channel_id")
-        message_id = ref.get("message_id")
-        if not (film_id and channel_id and message_id):
-            continue
-
-        views = 0
-        try:
-            msg = await bot.get_messages(channel_id, message_id)
-            views = int(msg.views or 0)
-        except Exception:
-            pass
-
-        try:
-            await bot.edit_message_reply_markup(
-                chat_id=channel_id,
-                message_id=message_id,
-                reply_markup=_stats_keyboard(film_id, channel_id, message_id, views=views)
-            )
-        except Exception:
-            pass
-
-# ---------------------- ✅ کال‌بک‌های آمار ----------------------
-@bot.on_callback_query(filters.regex(r"^stat_refresh::(.+)::(-?\d+)::(\d+)$"))
+@bot.on_callback_query(filters.regex(r"^sr::(-?\d+)::(\d+)$"))
 async def stat_refresh_cb(client: Client, cq: CallbackQuery):
     await cq.answer()
-    film_id    = cq.matches[0].group(1)
-    channel_id = int(cq.matches[0].group(2))
-    message_id = int(cq.matches[0].group(3))
+    channel_id = int(cq.matches[0].group(1))
+    message_id = int(cq.matches[0].group(2))
+
+    # پیداکردن film_id از post_refs
+    film_doc = post_refs.find_one({"channel_id": channel_id, "message_id": message_id})
+    film_id = film_doc.get("film_id") if film_doc else None
 
     views = 0
     try:
@@ -1148,26 +1131,34 @@ async def stat_refresh_cb(client: Client, cq: CallbackQuery):
     except Exception:
         pass
 
-    try:
-        await client.edit_message_reply_markup(
-            chat_id=channel_id,
-            message_id=message_id,
-            reply_markup=_stats_keyboard(film_id, channel_id, message_id, views=views)
-        )
-    except Exception:
-        pass
+    if film_id:
+        try:
+            await client.edit_message_reply_markup(
+                chat_id=channel_id,
+                message_id=message_id,
+                reply_markup=_stats_keyboard(film_id, channel_id, message_id, views=views)
+            )
+        except Exception:
+            pass
 
-@bot.on_callback_query(filters.regex(r"^stat_share::(.+)::(-?\d+)::(\d+)$"))
+@bot.on_callback_query(filters.regex(r"^ss::(-?\d+)::(\d+)$"))
 async def stat_share_cb(client: Client, cq: CallbackQuery):
-    film_id    = cq.matches[0].group(1)
-    channel_id = int(cq.matches[0].group(2))
-    message_id = int(cq.matches[0].group(3))
+    await cq.answer("🔁 شمارش اشتراک افزوده شد.", show_alert=False)
+    channel_id = int(cq.matches[0].group(1))
+    message_id = int(cq.matches[0].group(2))
+
+    # پیداکردن film_id از post_refs
+    film_doc = post_refs.find_one({"channel_id": channel_id, "message_id": message_id})
+    film_id = film_doc.get("film_id") if film_doc else None
+    if not film_id:
+        return
 
     try:
         stats_col.update_one({"film_id": film_id}, {"$inc": {"shares": 1}}, upsert=True)
     except Exception:
         pass
 
+    # رفرش سریع
     try:
         msg = await client.get_messages(channel_id, message_id)
         views = int(msg.views or 0)
@@ -1179,7 +1170,7 @@ async def stat_share_cb(client: Client, cq: CallbackQuery):
     except Exception:
         pass
 
-    await cq.answer("🔁 شمارش اشتراک افزوده شد.", show_alert=False)
+    # ارسال لینک برای کاربر کلیک‌کننده
     try:
         await client.send_message(cq.from_user.id, f"✨ این لینک را برای دوستانت بفرست:\nhttps://t.me/{BOT_USERNAME}?start={film_id}")
     except Exception:
@@ -1210,7 +1201,7 @@ async def main():
 
     # ثبت جاب‌ها
     scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
-    scheduler.add_job(refresh_stats_job,    "interval", minutes=2)
+    scheduler.add_job(lambda: None, "interval", minutes=60)  # نگهداشت ساده APScheduler
     scheduler.start()
     print("📅 Scheduler started successfully!")
     print("🤖 Bot started. Waiting for updates…")
