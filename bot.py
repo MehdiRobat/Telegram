@@ -1467,11 +1467,9 @@ async def stat_share_cb(client: Client, cq: CallbackQuery):
     except Exception:
         pass
 
-# ---------------------- 🚀 main(): استارت بات + Scheduler + idle ----------------------
 scheduler = AsyncIOScheduler()
 
 async def main():
-    # حذف وبهوک (برای اطمینان در دیپلوی‌های قبلی)
     try:
         import urllib.request
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
@@ -1480,18 +1478,14 @@ async def main():
     except Exception as e:
         print("⚠️ deleteWebhook (HTTP) error:", e)
 
-    # استارت بات (همین event loop)
-    
-
-    # جاب‌ها
     scheduler.add_job(send_scheduled_posts, "interval", minutes=1)
     scheduler.add_job(refresh_stats_job,    "interval", minutes=2)
     scheduler.start()
     print("📅 Scheduler started successfully!")
     print("🤖 Bot started. Waiting for updates…")
 
-    # نگه‌دار
     await idle()
+
 
     
 # ---------------------- ▶️ اجرای نهایی ----------------------
