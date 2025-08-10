@@ -16,6 +16,7 @@ from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineK
 from pymongo import MongoClient
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import logging
+import json
 
 # ---------------------- ⚙️ بارگذاری env ----------------------
 load_dotenv()
